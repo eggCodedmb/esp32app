@@ -1,5 +1,12 @@
 # ESP32App
 
+## 产品效果图
+### 页面1
+![页面1](页面1.png)
+
+### 页面2
+![页面2](页面2.png)
+
 基于 ESP32（Arduino + PlatformIO）的网页控制应用。
 
 ## 功能特性
@@ -96,3 +103,4 @@ C:\Users\25547\.platformio\penv\Scripts\platformio.exe test -e esp32dev_test
 - 登录会话为内存态并带有效期控制。
 - 密码明文保存到 NVS（`Preferences`）。
 - 计算机配置保存到 NVS（`Preferences`）。
+- BUG:问题是不能检测到电脑是否开机，正在寻找解决方案。
