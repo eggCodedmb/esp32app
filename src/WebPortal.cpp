@@ -598,7 +598,7 @@ String WebPortal::dashboardPage() const {
       <form id="bemfaForm">
         <div class="inline-check">
           <input id="bemfaEnabled" name="bemfaEnabled" type="checkbox">
-          <label for="bemfaEnabled">启用巴法云控制</label>
+          <label for="bemfaEnabled" style="margin: 0;">启用巴法云控制</label>
         </div>
         <div class="row">
           <div>
@@ -711,6 +711,27 @@ String WebPortal::dashboardPage() const {
       button.textContent = busy ? "开机中..." : "执行开机";
     }
 
+    function bemfaStateLabel(state) {
+      if (state === "DISABLED") return "已禁用";
+      if (state === "WAIT_CONFIG") return "待配置";
+      if (state === "WAIT_WIFI") return "等待 WiFi";
+      if (state === "READY") return "准备连接";
+      if (state === "CONNECTING") return "连接中";
+      if (state === "SUSPENDED") return "已暂停";
+      if (state === "ONLINE") return "在线";
+      if (state === "OFFLINE") return "离线";
+      if (state === "ERROR") return "异常";
+      return state || "-";
+    }
+
+    function bemfaMessageLabel(message) {
+      if (!message) return "";
+      if (message === "Disconnected on logout.") return "退出断开";
+      if (message === "Bemfa suspended after logout.") return "已暂停";
+      if (message === "Waiting to reconnect.") return "等待重连";
+      return message;
+    }
+
     function updateBemfaStatus(data) {
       const state = data.state || data.bemfaState || "-";
       const connected = data.connected !== undefined ? !!data.connected : !!data.bemfaConnected;
@@ -718,11 +739,11 @@ String WebPortal::dashboardPage() const {
       const subscribeTopic = data.subscribeTopic || ((data.bemfaTopic || "") ? ((data.bemfaTopic || "") + "/set") : "");
       const publishTopic = data.publishTopic || ((data.bemfaTopic || "") ? ((data.bemfaTopic || "") + "/up") : "");
 
-      setText("bemfaState", state);
-      setText("bemfaConnected", connected ? "ONLINE" : "OFFLINE");
-      setText("bemfaStatus", message);
+      setText("bemfaState", bemfaStateLabel(state));
+      setText("bemfaConnected", connected ? "已连接" : "未连接");
+      setText("bemfaStatus", bemfaMessageLabel(message));
       if (subscribeTopic || publishTopic) {
-        setText("bemfaTopics", "SUB: " + (subscribeTopic || "-") + " | PUB: " + (publishTopic || "-"));
+        setText("bemfaTopics", "订阅: " + (subscribeTopic || "-") + " | 上报: " + (publishTopic || "-"));
       } else {
         setText("bemfaTopics", "-");
       }
