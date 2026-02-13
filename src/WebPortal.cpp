@@ -45,12 +45,14 @@ WebPortal::WebPortal(uint16_t port,
                      AuthService& authService,
                      WifiService& wifiService,
                      ConfigStore& configStore,
-                     PowerOnService& powerOnService)
+                     PowerOnService& powerOnService,
+                     BemfaService& bemfaService)
     : _server(port),
       _authService(authService),
       _wifiService(wifiService),
       _configStore(configStore),
-      _powerOnService(powerOnService) {}
+      _powerOnService(powerOnService),
+      _bemfaService(bemfaService) {}
 
 void WebPortal::begin() {
   registerRoutes();
@@ -110,6 +112,8 @@ void WebPortal::registerRoutes() {
     }
 
     const ComputerConfig config = _configStore.loadComputerConfig();
+    const BemfaConfig bemfaConfig = _configStore.loadBemfaConfig();
+    const BemfaRuntimeStatus bemfaStatus = _bemfaService.getStatus();
     const PowerOnStatus power = _powerOnService.getStatus();
 
     String body = "{";
@@ -121,7 +125,16 @@ void WebPortal::registerRoutes() {
     body += "\"powerBusy\":" + String(power.busy ? "true" : "false") + ",";
     body += "\"wifiConnected\":" + String(_wifiService.isConnected() ? "true" : "false") + ",";
     body += "\"wifiSsid\":\"" + jsonEscape(_wifiService.currentSsid()) + "\",";
-    body += "\"wifiIp\":\"" + jsonEscape(_wifiService.ipAddress()) + "\"";
+    body += "\"wifiIp\":\"" + jsonEscape(_wifiService.ipAddress()) + "\",";
+    body += "\"bemfaEnabled\":" + String(bemfaConfig.enabled ? "true" : "false") + ",";
+    body += "\"bemfaHost\":\"" + jsonEscape(bemfaConfig.host) + "\",";
+    body += "\"bemfaPort\":" + String(bemfaConfig.port) + ",";
+    body += "\"bemfaUid\":\"" + jsonEscape(bemfaConfig.uid) + "\",";
+    body += "\"bemfaKey\":\"" + jsonEscape(bemfaConfig.key) + "\",";
+    body += "\"bemfaTopic\":\"" + jsonEscape(bemfaConfig.topic) + "\",";
+    body += "\"bemfaConnected\":" + String(bemfaStatus.mqttConnected ? "true" : "false") + ",";
+    body += "\"bemfaState\":\"" + jsonEscape(bemfaStatus.state) + "\",";
+    body += "\"bemfaMessage\":\"" + jsonEscape(bemfaStatus.message) + "\"";
     body += "}";
 
     request->send(200, "application/json", body);
@@ -151,12 +164,47 @@ void WebPortal::registerRoutes() {
       config.mac = normalizedMac;
     }
 
-    const bool saved = _configStore.saveComputerConfig(config);
-    if (!saved) {
+    BemfaConfig bemfaConfig = _configStore.loadBemfaConfig();
+    if (request->hasParam("bemfaEnabled", true)) {
+      bemfaConfig.enabled = parseBoolValue(request->getParam("bemfaEnabled", true)->value(), false);
+    }
+    if (request->hasParam("bemfaHost", true)) {
+      bemfaConfig.host = request->getParam("bemfaHost", true)->value();
+      bemfaConfig.host.trim();
+      if (bemfaConfig.host.isEmpty()) {
+        bemfaConfig.host = "bemfa.com";
+      }
+    }
+    if (request->hasParam("bemfaPort", true)) {
+      const int parsedBemfaPort = request->getParam("bemfaPort", true)->value().toInt();
+      if (parsedBemfaPort > 0 && parsedBemfaPort <= 65535) {
+        bemfaConfig.port = static_cast<uint16_t>(parsedBemfaPort);
+      }
+    }
+    if (request->hasParam("bemfaUid", true)) {
+      bemfaConfig.uid = request->getParam("bemfaUid", true)->value();
+      bemfaConfig.uid.trim();
+    }
+    if (request->hasParam("bemfaKey", true)) {
+      bemfaConfig.key = request->getParam("bemfaKey", true)->value();
+      bemfaConfig.key.trim();
+    }
+    if (request->hasParam("bemfaTopic", true)) {
+      bemfaConfig.topic = request->getParam("bemfaTopic", true)->value();
+      bemfaConfig.topic.trim();
+      while (bemfaConfig.topic.endsWith("/")) {
+        bemfaConfig.topic.remove(bemfaConfig.topic.length() - 1);
+      }
+    }
+
+    const bool computerSaved = _configStore.saveComputerConfig(config);
+    const bool bemfaSaved = _configStore.saveBemfaConfig(bemfaConfig);
+    if (!computerSaved || !bemfaSaved) {
       request->send(500, "application/json", "{\"success\":false,\"error\":\"save_failed\"}");
       return;
     }
 
+    _bemfaService.updateConfig(bemfaConfig);
     request->send(200, "application/json", "{\"success\":true}");
   });
 
@@ -227,6 +275,32 @@ void WebPortal::registerRoutes() {
     body += "\"error\":\"" + jsonEscape(status.errorCode) + "\",";
     body += "\"busy\":" + String(status.busy ? "true" : "false");
     body += "}";
+    request->send(200, "application/json", body);
+  });
+
+  _server.on("/api/bemfa/status", HTTP_GET, [this](AsyncWebServerRequest* request) {
+    if (!ensureAuthorized(request, true)) {
+      return;
+    }
+
+    const BemfaRuntimeStatus status = _bemfaService.getStatus();
+    String body = "{";
+    body += "\"enabled\":" + String(status.enabled ? "true" : "false") + ",";
+    body += "\"configured\":" + String(status.configured ? "true" : "false") + ",";
+    body += "\"wifiConnected\":" + String(status.wifiConnected ? "true" : "false") + ",";
+    body += "\"connected\":" + String(status.mqttConnected ? "true" : "false") + ",";
+    body += "\"state\":\"" + jsonEscape(status.state) + "\",";
+    body += "\"message\":\"" + jsonEscape(status.message) + "\",";
+    body += "\"subscribeTopic\":\"" + jsonEscape(status.subscribeTopic) + "\",";
+    body += "\"publishTopic\":\"" + jsonEscape(status.publishTopic) + "\",";
+    body += "\"lastCommand\":\"" + jsonEscape(status.lastCommand) + "\",";
+    body += "\"lastPublish\":\"" + jsonEscape(status.lastPublish) + "\",";
+    body += "\"reconnectCount\":" + String(status.reconnectCount) + ",";
+    body += "\"lastConnectAtMs\":" + String(status.lastConnectAtMs) + ",";
+    body += "\"lastCommandAtMs\":" + String(status.lastCommandAtMs) + ",";
+    body += "\"lastPublishAtMs\":" + String(status.lastPublishAtMs);
+    body += "}";
+
     request->send(200, "application/json", body);
   });
 
@@ -438,6 +512,9 @@ String WebPortal::dashboardPage() const {
     .metric { border: 1px solid var(--line); border-radius: 8px; padding: 10px; background: #f8fafc; }
     .metric-title { display: block; color: #4b5563; font-size: 12px; }
     .metric-value { display: block; margin-top: 6px; font-size: 15px; font-weight: 600; word-break: break-word; }
+    .inline-check { display: flex; align-items: center; gap: 10px; margin-top: 8px; }
+    .inline-check input[type="checkbox"] { width: auto; margin: 0; }
+    .code { font-family: Consolas, Monaco, monospace; font-size: 12px; color: #374151; }
     @media (max-width: 720px) {
       .row { grid-template-columns: 1fr; }
       .metrics { grid-template-columns: 1fr 1fr; }
@@ -514,6 +591,42 @@ String WebPortal::dashboardPage() const {
         <button type="submit">保存配置</button>
       </form>
       <p id="configStatus" class="status"></p>
+    </section>
+
+    <section>
+      <h2>Bemfa Cloud</h2>
+      <form id="bemfaForm">
+        <div class="inline-check">
+          <input id="bemfaEnabled" name="bemfaEnabled" type="checkbox">
+          <label for="bemfaEnabled">启用巴法云控制</label>
+        </div>
+        <div class="row">
+          <div>
+            <label for="bemfaTopic">主题 Topic</label>
+            <input id="bemfaTopic" name="bemfaTopic" autocomplete="off" placeholder="esp32_switch">
+          </div>
+          <div>
+            <label for="bemfaUid">私钥 UID</label>
+            <input id="bemfaUid" name="bemfaUid" autocomplete="off">
+          </div>
+          <div>
+            <label for="bemfaKey">Key（可选）</label>
+            <input id="bemfaKey" name="bemfaKey" type="password" autocomplete="off">
+          </div>
+          <div>
+            <label for="bemfaHost">主机</label>
+            <input id="bemfaHost" name="bemfaHost" autocomplete="off" placeholder="bemfa.com">
+          </div>
+          <div>
+            <label for="bemfaPort">端口</label>
+            <input id="bemfaPort" name="bemfaPort" type="number" min="1" max="65535">
+          </div>
+        </div>
+        <button type="submit">保存巴法云配置</button>
+      </form>
+      <p class="muted">状态：<strong id="bemfaState">-</strong>，连接：<strong id="bemfaConnected">-</strong></p>
+      <p id="bemfaTopics" class="code">-</p>
+      <p id="bemfaStatus" class="status"></p>
     </section>
 
     <section>
@@ -596,6 +709,23 @@ String WebPortal::dashboardPage() const {
       const button = document.getElementById("powerButton");
       button.disabled = busy;
       button.textContent = busy ? "开机中..." : "执行开机";
+    }
+
+    function updateBemfaStatus(data) {
+      const state = data.state || data.bemfaState || "-";
+      const connected = data.connected !== undefined ? !!data.connected : !!data.bemfaConnected;
+      const message = data.message || data.bemfaMessage || "";
+      const subscribeTopic = data.subscribeTopic || ((data.bemfaTopic || "") ? ((data.bemfaTopic || "") + "/set") : "");
+      const publishTopic = data.publishTopic || ((data.bemfaTopic || "") ? ((data.bemfaTopic || "") + "/up") : "");
+
+      setText("bemfaState", state);
+      setText("bemfaConnected", connected ? "ONLINE" : "OFFLINE");
+      setText("bemfaStatus", message);
+      if (subscribeTopic || publishTopic) {
+        setText("bemfaTopics", "SUB: " + (subscribeTopic || "-") + " | PUB: " + (publishTopic || "-"));
+      } else {
+        setText("bemfaTopics", "-");
+      }
     }
 
     function formatBytes(value) {
@@ -715,7 +845,16 @@ String WebPortal::dashboardPage() const {
       document.getElementById("computerIp").value = data.computerIp || "";
       document.getElementById("computerMac").value = data.computerMac || "";
       document.getElementById("computerPort").value = data.computerPort || "";
+
+      document.getElementById("bemfaEnabled").checked = !!data.bemfaEnabled;
+      document.getElementById("bemfaTopic").value = data.bemfaTopic || "";
+      document.getElementById("bemfaUid").value = data.bemfaUid || "";
+      document.getElementById("bemfaKey").value = data.bemfaKey || "";
+      document.getElementById("bemfaHost").value = data.bemfaHost || "bemfa.com";
+      document.getElementById("bemfaPort").value = data.bemfaPort || 9501;
+
       updatePowerStatus(data);
+      updateBemfaStatus(data);
 
       if (data.wifiConnected) {
         setText("wifiStatus", "已连接：" + (data.wifiSsid || "") + "，IP：" + (data.wifiIp || ""));
@@ -739,6 +878,15 @@ String WebPortal::dashboardPage() const {
         updateSystemInfo(data);
       } catch (error) {
         setText("espInfoStatus", toMessage(error.message));
+      }
+    }
+
+    async function refreshBemfaStatus() {
+      try {
+        const data = await api("/api/bemfa/status");
+        updateBemfaStatus(data);
+      } catch (error) {
+        setText("bemfaStatus", toMessage(error.message));
       }
     }
 
@@ -832,6 +980,29 @@ String WebPortal::dashboardPage() const {
       }
     }
 
+    async function saveBemfaConfig(event) {
+      event.preventDefault();
+      const params = new URLSearchParams();
+      params.set("bemfaEnabled", document.getElementById("bemfaEnabled").checked ? "1" : "0");
+      params.set("bemfaTopic", (document.getElementById("bemfaTopic").value || "").trim());
+      params.set("bemfaUid", (document.getElementById("bemfaUid").value || "").trim());
+      params.set("bemfaKey", (document.getElementById("bemfaKey").value || "").trim());
+      params.set("bemfaHost", (document.getElementById("bemfaHost").value || "").trim());
+      params.set("bemfaPort", (document.getElementById("bemfaPort").value || "").trim());
+
+      try {
+        await api("/api/config", {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: params.toString()
+        });
+        setText("bemfaStatus", "巴法云配置已保存。");
+        await refreshBemfaStatus();
+      } catch (error) {
+        setText("bemfaStatus", toMessage(error.message));
+      }
+    }
+
     async function savePassword(event) {
       event.preventDefault();
       const params = new URLSearchParams(new FormData(event.target));
@@ -860,9 +1031,11 @@ String WebPortal::dashboardPage() const {
     document.getElementById("connectButton").addEventListener("click", connectWifi);
     document.getElementById("powerButton").addEventListener("click", powerOn);
     document.getElementById("configForm").addEventListener("submit", saveConfig);
+    document.getElementById("bemfaForm").addEventListener("submit", saveBemfaConfig);
     document.getElementById("passwordForm").addEventListener("submit", savePassword);
 
     window.addEventListener("DOMContentLoaded", async function () {
+      const pollIntervalMs = 10000;
       updateScanButtonState();
       try {
         await loadConfig();
@@ -870,9 +1043,11 @@ String WebPortal::dashboardPage() const {
         setText("configStatus", toMessage(error.message));
       }
       await refreshSystemInfo();
+      await refreshBemfaStatus();
       await scanWifi();
-      setInterval(refreshPowerStatus, 2000);
-      setInterval(refreshSystemInfo, 5000);
+      setInterval(refreshPowerStatus, pollIntervalMs);
+      setInterval(refreshBemfaStatus, pollIntervalMs);
+      setInterval(refreshSystemInfo, pollIntervalMs);
     });
   </script>
 </body>

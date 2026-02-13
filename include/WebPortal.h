@@ -4,6 +4,7 @@
 #include <ESPAsyncWebServer.h>
 
 #include "AuthService.h"
+#include "BemfaService.h"
 #include "ConfigStore.h"
 #include "PowerOnService.h"
 #include "WifiService.h"
@@ -14,7 +15,8 @@ class WebPortal {
             AuthService& authService,
             WifiService& wifiService,
             ConfigStore& configStore,
-            PowerOnService& powerOnService);
+            PowerOnService& powerOnService,
+            BemfaService& bemfaService);
 
   void begin();
 
@@ -33,6 +35,7 @@ class WebPortal {
   WifiService& _wifiService;
   ConfigStore& _configStore;
   PowerOnService& _powerOnService;
+  BemfaService& _bemfaService;
 
   void registerRoutes();
   bool ensureAuthorized(AsyncWebServerRequest* request, bool apiRequest) const;

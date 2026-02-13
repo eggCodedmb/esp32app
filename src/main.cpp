@@ -2,6 +2,7 @@
 #include <WiFi.h>
 
 #include "AuthService.h"
+#include "BemfaService.h"
 #include "ConfigStore.h"
 #include "HostProbeService.h"
 #include "PowerOnService.h"
@@ -19,10 +20,70 @@ ConfigStore configStore;
 WakeOnLanService wakeOnLanService;
 HostProbeService hostProbeService;
 PowerOnService powerOnService(wakeOnLanService, hostProbeService);
-WebPortal webPortal(80, authService, wifiService, configStore, powerOnService);
+BemfaService bemfaService;
+WebPortal webPortal(80, authService, wifiService, configStore, powerOnService, bemfaService);
 bool setupApRunning = false;
 bool wifiStateInitialized = false;
 bool lastWifiConnected = false;
+String lastReportedPowerState = "";
+
+bool isPowerOnCommand(const String& command) {
+  return command == "on" || command == "1" || command == "start" || command == "wake";
+}
+
+void handleBemfaCommand(bool wifiConnected) {
+  String command;
+  if (!bemfaService.takeCommand(&command)) {
+    return;
+  }
+
+  Serial.print("Bemfa command received: ");
+  Serial.println(command);
+
+  if (command == "status") {
+    const PowerOnStatus status = powerOnService.getStatus();
+    bemfaService.publishStatus("power:" + status.stateText);
+    return;
+  }
+
+  if (!isPowerOnCommand(command)) {
+    bemfaService.publishStatus("unknown_command");
+    return;
+  }
+
+  const ComputerConfig config = configStore.loadComputerConfig();
+  String errorCode;
+  const bool accepted = powerOnService.requestPowerOn(config, wifiConnected, &errorCode);
+  powerOnService.tick(wifiConnected);
+
+  if (!accepted) {
+    const PowerOnStatus status = powerOnService.getStatus();
+    const String normalizedError = errorCode.isEmpty() ? status.errorCode : errorCode;
+    bemfaService.publishStatus("power:" + status.stateText + ",error:" + normalizedError);
+    return;
+  }
+
+  bemfaService.publishStatus("power:BOOTING");
+}
+
+void reportPowerStateIfChanged() {
+  if (!bemfaService.isConnected()) {
+    return;
+  }
+
+  const PowerOnStatus status = powerOnService.getStatus();
+  if (status.stateText == lastReportedPowerState) {
+    return;
+  }
+
+  String payload = "power:" + status.stateText;
+  if (!status.errorCode.isEmpty()) {
+    payload += ",error:" + status.errorCode;
+  }
+  if (bemfaService.publishStatus(payload)) {
+    lastReportedPowerState = status.stateText;
+  }
+}
 
 void startSetupAccessPoint() {
   if (setupApRunning) {
@@ -82,6 +143,9 @@ void setup() {
   }
 
   syncSetupAccessPoint(wifiService.isConnected());
+  bemfaService.begin();
+  bemfaService.updateConfig(configStore.loadBemfaConfig());
+  lastReportedPowerState = "";
   webPortal.begin();
 
   Serial.println("Web portal ready.");
@@ -91,5 +155,8 @@ void loop() {
   const bool wifiConnected = wifiService.isConnected();
   syncSetupAccessPoint(wifiConnected);
   powerOnService.tick(wifiConnected);
+  bemfaService.tick(wifiConnected);
+  handleBemfaCommand(wifiConnected);
+  reportPowerStateIfChanged();
   delay(100);
 }

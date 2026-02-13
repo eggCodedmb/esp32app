@@ -2,6 +2,7 @@
 #include <unity.h>
 
 #include "AuthService.h"
+#include "BemfaService.h"
 #include "ConfigStore.h"
 #include "HostProbeService.h"
 #include "PowerOnService.h"
@@ -16,7 +17,8 @@ ConfigStore config;
 WakeOnLanService wol;
 HostProbeService probe;
 PowerOnService powerOnService(wol, probe);
-WebPortal portal(80, auth, wifi, config, powerOnService);
+BemfaService bemfaService;
+WebPortal portal(80, auth, wifi, config, powerOnService, bemfaService);
 }  // namespace
 
 void setUp() {}
@@ -53,6 +55,9 @@ void test_dashboard_page_contains_config_and_password_sections() {
   TEST_ASSERT_TRUE(page.indexOf("/api/power/on") >= 0);
   TEST_ASSERT_TRUE(page.indexOf("/api/power/status") >= 0);
   TEST_ASSERT_TRUE(page.indexOf("/api/system/info") >= 0);
+  TEST_ASSERT_TRUE(page.indexOf("/api/bemfa/status") >= 0);
+  TEST_ASSERT_TRUE(page.indexOf("bemfaForm") >= 0);
+  TEST_ASSERT_TRUE(page.indexOf("bemfaTopic") >= 0);
   TEST_ASSERT_TRUE(page.indexOf("espUptime") >= 0);
   TEST_ASSERT_TRUE(page.indexOf("espFlashFree") >= 0);
   TEST_ASSERT_TRUE(page.indexOf("passwordForm") >= 0);

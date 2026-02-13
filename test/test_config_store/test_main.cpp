@@ -48,6 +48,39 @@ void test_save_and_load_config_roundtrip() {
   TEST_ASSERT_EQUAL_UINT16(expected.port, actual.port);
 }
 
+void test_load_default_bemfa_config_values() {
+  ConfigStore store;
+  const BemfaConfig config = store.loadBemfaConfig();
+
+  TEST_ASSERT_FALSE(config.enabled);
+  TEST_ASSERT_EQUAL_STRING("bemfa.com", config.host.c_str());
+  TEST_ASSERT_EQUAL_UINT16(9501, config.port);
+  TEST_ASSERT_EQUAL_STRING("", config.uid.c_str());
+  TEST_ASSERT_EQUAL_STRING("", config.key.c_str());
+  TEST_ASSERT_EQUAL_STRING("", config.topic.c_str());
+}
+
+void test_save_and_load_bemfa_config_roundtrip() {
+  ConfigStore store;
+  BemfaConfig expected;
+  expected.enabled = true;
+  expected.host = "bemfa.com";
+  expected.port = 9501;
+  expected.uid = "uid-demo";
+  expected.key = "key-demo";
+  expected.topic = "esp32_topic";
+
+  TEST_ASSERT_TRUE(store.saveBemfaConfig(expected));
+
+  const BemfaConfig actual = store.loadBemfaConfig();
+  TEST_ASSERT_TRUE(actual.enabled);
+  TEST_ASSERT_EQUAL_STRING(expected.host.c_str(), actual.host.c_str());
+  TEST_ASSERT_EQUAL_UINT16(expected.port, actual.port);
+  TEST_ASSERT_EQUAL_STRING(expected.uid.c_str(), actual.uid.c_str());
+  TEST_ASSERT_EQUAL_STRING(expected.key.c_str(), actual.key.c_str());
+  TEST_ASSERT_EQUAL_STRING(expected.topic.c_str(), actual.topic.c_str());
+}
+
 void setup() {
   Serial.begin(115200);
   delay(200);
@@ -55,6 +88,8 @@ void setup() {
   UNITY_BEGIN();
   RUN_TEST(test_load_default_config_values);
   RUN_TEST(test_save_and_load_config_roundtrip);
+  RUN_TEST(test_load_default_bemfa_config_values);
+  RUN_TEST(test_save_and_load_bemfa_config_roundtrip);
   UNITY_END();
 }
 
