@@ -72,6 +72,15 @@ void setup() {
   delay(200);
 
   authService.begin();
+  const bool restored = wifiService.reconnectFromStored();
+  if (restored) {
+    Serial.print("Connected using stored WiFi credentials: ");
+    Serial.println(wifiService.currentSsid());
+  } else {
+    Serial.print("Stored WiFi reconnect not ready: ");
+    Serial.println(wifiService.lastMessage());
+  }
+
   syncSetupAccessPoint(wifiService.isConnected());
   webPortal.begin();
 

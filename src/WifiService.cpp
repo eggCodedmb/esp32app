@@ -1,5 +1,6 @@
 #include "WifiService.h"
 
+#include <Preferences.h>
 #include <WiFi.h>
 #include <algorithm>
 
@@ -135,13 +136,15 @@ std::vector<WifiNetworkInfo> WifiService::collectScanResults(int count) const {
 }
 
 bool WifiService::connectTo(const String& ssid, const String& password, uint32_t timeoutMs) {
-  if (ssid.isEmpty()) {
-    _lastMessage = "SSID 不能为空。";
+  String normalizedSsid = ssid;
+  normalizedSsid.trim();
+  if (normalizedSsid.isEmpty()) {
+    _lastMessage = "SSID is required.";
     return false;
   }
 
   WiFi.mode(WIFI_AP_STA);
-  WiFi.begin(ssid.c_str(), password.c_str());
+  WiFi.begin(normalizedSsid.c_str(), password.c_str());
 
   const uint32_t startTime = millis();
   while (WiFi.status() != WL_CONNECTED && (millis() - startTime) < timeoutMs) {
@@ -149,12 +152,29 @@ bool WifiService::connectTo(const String& ssid, const String& password, uint32_t
   }
 
   if (WiFi.status() == WL_CONNECTED) {
-    _lastMessage = "已连接到 " + ssid + "。";
+    const bool persisted = persistCredentials(normalizedSsid, password);
+    _lastMessage = persisted ? ("Connected to " + normalizedSsid + ".")
+                             : ("Connected to " + normalizedSsid + ", but failed to save credentials.");
     return true;
   }
 
-  _lastMessage = "WiFi 连接失败或超时。";
+  _lastMessage = "WiFi connection failed or timed out.";
   return false;
+}
+
+bool WifiService::reconnectFromStored(uint32_t timeoutMs) {
+  String storedSsid;
+  String storedPassword;
+  if (!loadStoredCredentials(&storedSsid, &storedPassword)) {
+    _lastMessage = "No stored WiFi credentials.";
+    return false;
+  }
+
+  const bool connected = connectTo(storedSsid, storedPassword, timeoutMs);
+  if (!connected) {
+    _lastMessage = "Stored WiFi credentials failed for SSID: " + storedSsid;
+  }
+  return connected;
 }
 
 bool WifiService::isConnected() const {
@@ -171,4 +191,35 @@ String WifiService::ipAddress() const {
 
 String WifiService::lastMessage() const {
   return _lastMessage;
+}
+
+bool WifiService::loadStoredCredentials(String* ssid, String* password) const {
+  if (ssid == nullptr || password == nullptr) {
+    return false;
+  }
+
+  Preferences preferences;
+  if (!preferences.begin(kStorageNamespace, true)) {
+    return false;
+  }
+
+  *ssid = preferences.getString(kStorageSsidKey, "");
+  *password = preferences.getString(kStoragePasswordKey, "");
+  preferences.end();
+
+  ssid->trim();
+  return !ssid->isEmpty();
+}
+
+bool WifiService::persistCredentials(const String& ssid, const String& password) const {
+  Preferences preferences;
+  if (!preferences.begin(kStorageNamespace, false)) {
+    return false;
+  }
+
+  preferences.putString(kStorageSsidKey, ssid);
+  preferences.putString(kStoragePasswordKey, password);
+  preferences.end();
+
+  return true;
 }
