@@ -2,6 +2,7 @@
 
 #include <cctype>
 #include <cstdio>
+#include <ESP.h>
 
 namespace {
 bool normalizeMacAddress(const String& source, String* normalized) {
@@ -112,11 +113,9 @@ void WebPortal::registerRoutes() {
     const PowerOnStatus power = _powerOnService.getStatus();
 
     String body = "{";
-    body += "\"computerName\":\"" + jsonEscape(config.name) + "\",";
     body += "\"computerIp\":\"" + jsonEscape(config.ip) + "\",";
     body += "\"computerMac\":\"" + jsonEscape(config.mac) + "\",";
     body += "\"computerPort\":" + String(config.port) + ",";
-    body += "\"computerOwner\":\"" + jsonEscape(config.owner) + "\",";
     body += "\"powerState\":\"" + jsonEscape(power.stateText) + "\",";
     body += "\"powerMessage\":\"" + jsonEscape(power.message) + "\",";
     body += "\"powerBusy\":" + String(power.busy ? "true" : "false") + ",";
@@ -134,14 +133,8 @@ void WebPortal::registerRoutes() {
     }
 
     ComputerConfig config = _configStore.loadComputerConfig();
-    if (request->hasParam("computerName", true)) {
-      config.name = request->getParam("computerName", true)->value();
-    }
     if (request->hasParam("computerIp", true)) {
       config.ip = request->getParam("computerIp", true)->value();
-    }
-    if (request->hasParam("computerOwner", true)) {
-      config.owner = request->getParam("computerOwner", true)->value();
     }
     if (request->hasParam("computerPort", true)) {
       const int parsedPort = request->getParam("computerPort", true)->value().toInt();
@@ -234,6 +227,40 @@ void WebPortal::registerRoutes() {
     body += "\"error\":\"" + jsonEscape(status.errorCode) + "\",";
     body += "\"busy\":" + String(status.busy ? "true" : "false");
     body += "}";
+    request->send(200, "application/json", body);
+  });
+
+  _server.on("/api/system/info", HTTP_GET, [this](AsyncWebServerRequest* request) {
+    if (!ensureAuthorized(request, true)) {
+      return;
+    }
+
+    const uint32_t uptimeMs = millis();
+    const uint32_t uptimeSeconds = uptimeMs / 1000UL;
+    const uint32_t heapTotal = ESP.getHeapSize();
+    const uint32_t heapFree = ESP.getFreeHeap();
+    const uint32_t heapMinFree = ESP.getMinFreeHeap();
+    const uint32_t heapMaxAlloc = ESP.getMaxAllocHeap();
+    const uint32_t psramTotal = ESP.getPsramSize();
+    const uint32_t psramFree = ESP.getFreePsram();
+    const uint32_t flashTotal = ESP.getFlashChipSize();
+    const uint32_t sketchUsed = ESP.getSketchSize();
+    const uint32_t flashFree = flashTotal > sketchUsed ? (flashTotal - sketchUsed) : 0;
+
+    String body = "{";
+    body += "\"uptimeMs\":" + String(uptimeMs) + ",";
+    body += "\"uptimeSeconds\":" + String(uptimeSeconds) + ",";
+    body += "\"heapTotal\":" + String(heapTotal) + ",";
+    body += "\"heapFree\":" + String(heapFree) + ",";
+    body += "\"heapMinFree\":" + String(heapMinFree) + ",";
+    body += "\"heapMaxAlloc\":" + String(heapMaxAlloc) + ",";
+    body += "\"psramTotal\":" + String(psramTotal) + ",";
+    body += "\"psramFree\":" + String(psramFree) + ",";
+    body += "\"flashTotal\":" + String(flashTotal) + ",";
+    body += "\"sketchUsed\":" + String(sketchUsed) + ",";
+    body += "\"flashFree\":" + String(flashFree);
+    body += "}";
+
     request->send(200, "application/json", body);
   });
 
@@ -407,8 +434,16 @@ String WebPortal::dashboardPage() const {
     button:disabled { opacity: 0.7; cursor: not-allowed; }
     .muted { color: #4b5563; font-size: 13px; }
     .status { min-height: 20px; margin-top: 6px; font-size: 14px; }
+    .metrics { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+    .metric { border: 1px solid var(--line); border-radius: 8px; padding: 10px; background: #f8fafc; }
+    .metric-title { display: block; color: #4b5563; font-size: 12px; }
+    .metric-value { display: block; margin-top: 6px; font-size: 15px; font-weight: 600; word-break: break-word; }
     @media (max-width: 720px) {
       .row { grid-template-columns: 1fr; }
+      .metrics { grid-template-columns: 1fr 1fr; }
+    }
+    @media (max-width: 460px) {
+      .metrics { grid-template-columns: 1fr; }
     }
   </style>
 </head>
@@ -446,13 +481,23 @@ String WebPortal::dashboardPage() const {
     </section>
 
     <section>
+      <h2>ESP 设备信息</h2>
+      <div class="metrics">
+        <div class="metric"><span class="metric-title">运行时长</span><span id="espUptime" class="metric-value">-</span></div>
+        <div class="metric"><span class="metric-title">堆内存 空闲/总量</span><span id="espHeap" class="metric-value">-</span></div>
+        <div class="metric"><span class="metric-title">堆内存最小空闲</span><span id="espHeapMin" class="metric-value">-</span></div>
+        <div class="metric"><span class="metric-title">最大可分配块</span><span id="espHeapMaxAlloc" class="metric-value">-</span></div>
+        <div class="metric"><span class="metric-title">Flash 已用/总量</span><span id="espFlash" class="metric-value">-</span></div>
+        <div class="metric"><span class="metric-title">Flash 剩余</span><span id="espFlashFree" class="metric-value">-</span></div>
+        <div class="metric"><span class="metric-title">PSRAM 空闲/总量</span><span id="espPsram" class="metric-value">-</span></div>
+      </div>
+      <p id="espInfoStatus" class="status"></p>
+    </section>
+
+    <section>
       <h2>计算机配置</h2>
       <form id="configForm">
         <div class="row">
-          <div>
-            <label for="computerName">计算机名称</label>
-            <input id="computerName" name="computerName" autocomplete="off">
-          </div>
           <div>
             <label for="computerIp">计算机 IP</label>
             <input id="computerIp" name="computerIp" autocomplete="off">
@@ -464,10 +509,6 @@ String WebPortal::dashboardPage() const {
           <div>
             <label for="computerPort">探测端口</label>
             <input id="computerPort" name="computerPort" type="number" min="1" max="65535">
-          </div>
-          <div>
-            <label for="computerOwner">使用者</label>
-            <input id="computerOwner" name="computerOwner" autocomplete="off">
           </div>
         </div>
         <button type="submit">保存配置</button>
@@ -557,6 +598,58 @@ String WebPortal::dashboardPage() const {
       button.textContent = busy ? "开机中..." : "执行开机";
     }
 
+    function formatBytes(value) {
+      const bytes = Number(value);
+      if (!Number.isFinite(bytes) || bytes < 0) {
+        return "-";
+      }
+      if (bytes < 1024) {
+        return Math.round(bytes) + " B";
+      }
+
+      const units = ["KB", "MB", "GB"];
+      let size = bytes / 1024;
+      let unitIndex = 0;
+      while (size >= 1024 && unitIndex < (units.length - 1)) {
+        size /= 1024;
+        unitIndex += 1;
+      }
+      const precision = size >= 100 ? 0 : (size >= 10 ? 1 : 2);
+      return size.toFixed(precision) + " " + units[unitIndex];
+    }
+
+    function formatUptime(secondsValue) {
+      const seconds = Math.max(0, Number(secondsValue) || 0);
+      const days = Math.floor(seconds / 86400);
+      const hours = Math.floor((seconds % 86400) / 3600);
+      const minutes = Math.floor((seconds % 3600) / 60);
+      const secs = Math.floor(seconds % 60);
+      const hhmmss =
+          String(hours).padStart(2, "0") + ":" + String(minutes).padStart(2, "0") + ":" + String(secs).padStart(2, "0");
+      if (days > 0) {
+        return days + "天 " + hhmmss;
+      }
+      return hhmmss;
+    }
+
+    function updateSystemInfo(data) {
+      setText("espUptime", formatUptime(data.uptimeSeconds));
+      setText("espHeap", formatBytes(data.heapFree) + " / " + formatBytes(data.heapTotal));
+      setText("espHeapMin", formatBytes(data.heapMinFree));
+      setText("espHeapMaxAlloc", formatBytes(data.heapMaxAlloc));
+      setText("espFlash", formatBytes(data.sketchUsed) + " / " + formatBytes(data.flashTotal));
+      setText("espFlashFree", formatBytes(data.flashFree));
+
+      const psramTotal = Number(data.psramTotal) || 0;
+      if (psramTotal > 0) {
+        setText("espPsram", formatBytes(data.psramFree) + " / " + formatBytes(psramTotal));
+      } else {
+        setText("espPsram", "不支持");
+      }
+
+      setText("espInfoStatus", "最后更新：" + new Date().toLocaleTimeString());
+    }
+
     let wifiScanRequesting = false;
     let wifiScanInProgress = false;
     let wifiScanTimer = 0;
@@ -619,11 +712,9 @@ String WebPortal::dashboardPage() const {
 
     async function loadConfig() {
       const data = await api("/api/config");
-      document.getElementById("computerName").value = data.computerName || "";
       document.getElementById("computerIp").value = data.computerIp || "";
       document.getElementById("computerMac").value = data.computerMac || "";
       document.getElementById("computerPort").value = data.computerPort || "";
-      document.getElementById("computerOwner").value = data.computerOwner || "";
       updatePowerStatus(data);
 
       if (data.wifiConnected) {
@@ -639,6 +730,15 @@ String WebPortal::dashboardPage() const {
         updatePowerStatus(data);
       } catch (error) {
         setText("powerStatus", toMessage(error.message));
+      }
+    }
+
+    async function refreshSystemInfo() {
+      try {
+        const data = await api("/api/system/info");
+        updateSystemInfo(data);
+      } catch (error) {
+        setText("espInfoStatus", toMessage(error.message));
       }
     }
 
@@ -769,8 +869,10 @@ String WebPortal::dashboardPage() const {
       } catch (error) {
         setText("configStatus", toMessage(error.message));
       }
+      await refreshSystemInfo();
       await scanWifi();
       setInterval(refreshPowerStatus, 2000);
+      setInterval(refreshSystemInfo, 5000);
     });
   </script>
 </body>

@@ -9,11 +9,9 @@ HostProbeService probe;
 
 ComputerConfig makeValidConfig() {
   ComputerConfig config;
-  config.name = "PC";
   config.ip = "192.168.1.100";
   config.mac = "AA:BB:CC:DD:EE:FF";
   config.port = 3389;
-  config.owner = "tester";
   return config;
 }
 }  // namespace

@@ -28,30 +28,24 @@ void test_load_default_config_values() {
   ConfigStore store;
   const ComputerConfig config = store.loadComputerConfig();
 
-  TEST_ASSERT_EQUAL_STRING("Office-PC", config.name.c_str());
   TEST_ASSERT_EQUAL_STRING("192.168.1.100", config.ip.c_str());
   TEST_ASSERT_EQUAL_STRING("00:11:22:33:44:55", config.mac.c_str());
   TEST_ASSERT_EQUAL_UINT16(3389, config.port);
-  TEST_ASSERT_EQUAL_STRING("admin", config.owner.c_str());
 }
 
 void test_save_and_load_config_roundtrip() {
   ConfigStore store;
   ComputerConfig expected;
-  expected.name = "Dev-PC";
   expected.ip = "10.0.0.123";
   expected.mac = "AA:BB:CC:DD:EE:FF";
   expected.port = 8080;
-  expected.owner = "tester";
 
   TEST_ASSERT_TRUE(store.saveComputerConfig(expected));
 
   const ComputerConfig actual = store.loadComputerConfig();
-  TEST_ASSERT_EQUAL_STRING(expected.name.c_str(), actual.name.c_str());
   TEST_ASSERT_EQUAL_STRING(expected.ip.c_str(), actual.ip.c_str());
   TEST_ASSERT_EQUAL_STRING(expected.mac.c_str(), actual.mac.c_str());
   TEST_ASSERT_EQUAL_UINT16(expected.port, actual.port);
-  TEST_ASSERT_EQUAL_STRING(expected.owner.c_str(), actual.owner.c_str());
 }
 
 void setup() {

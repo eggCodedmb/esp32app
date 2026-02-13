@@ -3,11 +3,9 @@
 #include <Arduino.h>
 
 struct ComputerConfig {
-  String name;
   String ip;
   String mac;
   uint16_t port;
-  String owner;
 };
 
 class ConfigStore {
