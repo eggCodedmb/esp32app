@@ -58,6 +58,9 @@ void test_dashboard_page_contains_config_and_password_sections() {
   TEST_ASSERT_TRUE(page.indexOf("/api/bemfa/status") >= 0);
   TEST_ASSERT_TRUE(page.indexOf("bemfaForm") >= 0);
   TEST_ASSERT_TRUE(page.indexOf("bemfaTopic") >= 0);
+  TEST_ASSERT_TRUE(page.indexOf("systemForm") >= 0);
+  TEST_ASSERT_TRUE(page.indexOf("statusPollIntervalMinutes") >= 0);
+  TEST_ASSERT_TRUE(page.indexOf("refreshAllButton") >= 0);
   TEST_ASSERT_TRUE(page.indexOf("espUptime") >= 0);
   TEST_ASSERT_TRUE(page.indexOf("espFlashFree") >= 0);
   TEST_ASSERT_TRUE(page.indexOf("passwordForm") >= 0);

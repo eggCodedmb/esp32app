@@ -13,6 +13,12 @@ constexpr const char* kBemfaPortKey = "bemfa_port";
 constexpr const char* kBemfaUidKey = "bemfa_uid";
 constexpr const char* kBemfaKeyKey = "bemfa_key";
 constexpr const char* kBemfaTopicKey = "bemfa_topic";
+
+constexpr const char* kStatusPollIntervalMinutesKey = "poll_min";
+
+bool isValidStatusPollIntervalMinutes(uint16_t value) {
+  return value == 0 || value == 1 || value == 3 || value == 10 || value == 30 || value == 60;
+}
 }  // namespace
 
 ComputerConfig ConfigStore::loadComputerConfig() const {
@@ -84,6 +90,40 @@ bool ConfigStore::saveBemfaConfig(const BemfaConfig& config) const {
   preferences.putString(kBemfaUidKey, config.uid);
   preferences.putString(kBemfaKeyKey, config.key);
   preferences.putString(kBemfaTopicKey, config.topic);
+
+  preferences.end();
+  return true;
+}
+
+SystemConfig ConfigStore::loadSystemConfig() const {
+  Preferences preferences;
+  SystemConfig config;
+
+  if (!preferences.begin(kNamespace, true)) {
+    return config;
+  }
+
+  config.statusPollIntervalMinutes =
+      preferences.getUShort(kStatusPollIntervalMinutesKey, config.statusPollIntervalMinutes);
+  if (!isValidStatusPollIntervalMinutes(config.statusPollIntervalMinutes)) {
+    config.statusPollIntervalMinutes = 3;
+  }
+
+  preferences.end();
+  return config;
+}
+
+bool ConfigStore::saveSystemConfig(const SystemConfig& config) const {
+  Preferences preferences;
+  if (!preferences.begin(kNamespace, false)) {
+    return false;
+  }
+
+  uint16_t normalizedIntervalMinutes = config.statusPollIntervalMinutes;
+  if (!isValidStatusPollIntervalMinutes(normalizedIntervalMinutes)) {
+    normalizedIntervalMinutes = 3;
+  }
+  preferences.putUShort(kStatusPollIntervalMinutesKey, normalizedIntervalMinutes);
 
   preferences.end();
   return true;

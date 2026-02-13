@@ -5,6 +5,8 @@
 #include <ESP.h>
 
 namespace {
+constexpr uint16_t kDefaultStatusPollIntervalMinutes = 3;
+
 bool normalizeMacAddress(const String& source, String* normalized) {
   if (normalized == nullptr) {
     return false;
@@ -38,6 +40,37 @@ bool normalizeMacAddress(const String& source, String* normalized) {
   }
 
   return true;
+}
+
+bool isValidStatusPollIntervalMinutes(uint16_t value) {
+  return value == 0 || value == 1 || value == 3 || value == 10 || value == 30 || value == 60;
+}
+
+uint16_t normalizeStatusPollIntervalMinutes(uint16_t value) {
+  if (!isValidStatusPollIntervalMinutes(value)) {
+    return kDefaultStatusPollIntervalMinutes;
+  }
+  return value;
+}
+
+uint16_t parseStatusPollIntervalMinutes(const String& value, uint16_t defaultValue) {
+  String normalized = value;
+  normalized.trim();
+  normalized.toLowerCase();
+
+  if (normalized == "manual") {
+    return 0;
+  }
+
+  const int parsedValue = normalized.toInt();
+  if (parsedValue >= 0 && parsedValue <= 65535) {
+    const uint16_t parsedInterval = static_cast<uint16_t>(parsedValue);
+    if (isValidStatusPollIntervalMinutes(parsedInterval)) {
+      return parsedInterval;
+    }
+  }
+
+  return normalizeStatusPollIntervalMinutes(defaultValue);
 }
 }  // namespace
 
@@ -113,6 +146,7 @@ void WebPortal::registerRoutes() {
 
     const ComputerConfig config = _configStore.loadComputerConfig();
     const BemfaConfig bemfaConfig = _configStore.loadBemfaConfig();
+    const SystemConfig systemConfig = _configStore.loadSystemConfig();
     const BemfaRuntimeStatus bemfaStatus = _bemfaService.getStatus();
     const PowerOnStatus power = _powerOnService.getStatus();
 
@@ -134,7 +168,9 @@ void WebPortal::registerRoutes() {
     body += "\"bemfaTopic\":\"" + jsonEscape(bemfaConfig.topic) + "\",";
     body += "\"bemfaConnected\":" + String(bemfaStatus.mqttConnected ? "true" : "false") + ",";
     body += "\"bemfaState\":\"" + jsonEscape(bemfaStatus.state) + "\",";
-    body += "\"bemfaMessage\":\"" + jsonEscape(bemfaStatus.message) + "\"";
+    body += "\"bemfaMessage\":\"" + jsonEscape(bemfaStatus.message) + "\",";
+    body +=
+        "\"statusPollIntervalMinutes\":" + String(systemConfig.statusPollIntervalMinutes);
     body += "}";
 
     request->send(200, "application/json", body);
@@ -197,9 +233,17 @@ void WebPortal::registerRoutes() {
       }
     }
 
+    SystemConfig systemConfig = _configStore.loadSystemConfig();
+    if (request->hasParam("statusPollIntervalMinutes", true)) {
+      const String rawInterval = request->getParam("statusPollIntervalMinutes", true)->value();
+      systemConfig.statusPollIntervalMinutes =
+          parseStatusPollIntervalMinutes(rawInterval, systemConfig.statusPollIntervalMinutes);
+    }
+
     const bool computerSaved = _configStore.saveComputerConfig(config);
     const bool bemfaSaved = _configStore.saveBemfaConfig(bemfaConfig);
-    if (!computerSaved || !bemfaSaved) {
+    const bool systemSaved = _configStore.saveSystemConfig(systemConfig);
+    if (!computerSaved || !bemfaSaved || !systemSaved) {
       request->send(500, "application/json", "{\"success\":false,\"error\":\"save_failed\"}");
       return;
     }
@@ -505,9 +549,11 @@ String WebPortal::dashboardPage() const {
     label { display: block; margin-top: 8px; font-size: 14px; }
     input, select { width: 100%; padding: 10px; border: 1px solid var(--line); border-radius: 8px; margin-top: 6px; }
     button { margin-top: 12px; padding: 10px 12px; border: none; border-radius: 8px; cursor: pointer; background: var(--accent); color: #fff; }
+    button.secondary { background: #334155; }
     button:disabled { opacity: 0.7; cursor: not-allowed; }
     .muted { color: #4b5563; font-size: 13px; }
     .status { min-height: 20px; margin-top: 6px; font-size: 14px; }
+    .inline-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
     .metrics { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
     .metric { border: 1px solid var(--line); border-radius: 8px; padding: 10px; background: #f8fafc; }
     .metric-title { display: block; color: #4b5563; font-size: 12px; }
@@ -536,6 +582,31 @@ String WebPortal::dashboardPage() const {
       <p class="muted">开机状态：<strong id="powerState">待机</strong></p>
       <button id="powerButton" type="button">执行开机</button>
       <p id="powerStatus" class="status"></p>
+    </section>
+
+    <section>
+      <h2>系统配置</h2>
+      <form id="systemForm">
+        <div class="row">
+          <div>
+            <label for="statusPollIntervalMinutes">状态轮询</label>
+            <select id="statusPollIntervalMinutes" name="statusPollIntervalMinutes">
+              <option value="manual">手动</option>
+              <option value="1">1 分钟</option>
+              <option value="3">3 分钟</option>
+              <option value="10">10 分钟</option>
+              <option value="30">30 分钟</option>
+              <option value="60">60 分钟</option>
+            </select>
+          </div>
+        </div>
+        <div class="inline-actions">
+          <button type="submit">保存系统配置</button>
+          <button id="refreshAllButton" class="secondary" type="button" hidden>统一刷新状态</button>
+        </div>
+      </form>
+      <p id="systemPollStatus" class="muted"></p>
+      <p id="systemConfigStatus" class="status"></p>
     </section>
 
     <section>
@@ -655,6 +726,58 @@ String WebPortal::dashboardPage() const {
   <script>
     function setText(id, text) {
       document.getElementById(id).textContent = text || "";
+    }
+
+    const defaultStatusPollIntervalMinutes = 3;
+    const allowedStatusPollIntervals = [1, 3, 10, 30, 60];
+    let statusPollTimer = 0;
+
+    function normalizeStatusPollIntervalMinutes(value) {
+      const minutes = Number(value);
+      if (!Number.isFinite(minutes)) {
+        return defaultStatusPollIntervalMinutes;
+      }
+      const normalized = Math.max(0, Math.floor(minutes));
+      if (normalized === 0) {
+        return 0;
+      }
+      return allowedStatusPollIntervals.indexOf(normalized) >= 0
+          ? normalized
+          : defaultStatusPollIntervalMinutes;
+    }
+
+    function statusPollIntervalLabel(minutes) {
+      if (minutes === 0) {
+        return "手动";
+      }
+      return "每 " + minutes + " 分钟自动刷新";
+    }
+
+    function statusPollIntervalSelectValue(minutes) {
+      return minutes === 0 ? "manual" : String(minutes);
+    }
+
+    function stopStatusPollTimer() {
+      if (statusPollTimer) {
+        clearInterval(statusPollTimer);
+        statusPollTimer = 0;
+      }
+    }
+
+    function applyStatusPolling(minutes) {
+      const normalizedMinutes = normalizeStatusPollIntervalMinutes(minutes);
+      const select = document.getElementById("statusPollIntervalMinutes");
+      const refreshButton = document.getElementById("refreshAllButton");
+
+      select.value = statusPollIntervalSelectValue(normalizedMinutes);
+      refreshButton.hidden = normalizedMinutes !== 0;
+
+      stopStatusPollTimer();
+      if (normalizedMinutes > 0) {
+        statusPollTimer = setInterval(refreshAllStatus, normalizedMinutes * 60 * 1000);
+      }
+
+      setText("systemPollStatus", "状态轮询：" + statusPollIntervalLabel(normalizedMinutes));
     }
 
     async function api(url, options) {
@@ -876,6 +999,7 @@ String WebPortal::dashboardPage() const {
 
       updatePowerStatus(data);
       updateBemfaStatus(data);
+      applyStatusPolling(data.statusPollIntervalMinutes);
 
       if (data.wifiConnected) {
         setText("wifiStatus", "已连接：" + (data.wifiSsid || "") + "，IP：" + (data.wifiIp || ""));
@@ -909,6 +1033,10 @@ String WebPortal::dashboardPage() const {
       } catch (error) {
         setText("bemfaStatus", toMessage(error.message));
       }
+    }
+
+    async function refreshAllStatus() {
+      await Promise.all([refreshPowerStatus(), refreshBemfaStatus(), refreshSystemInfo()]);
     }
 
     async function powerOn() {
@@ -1024,6 +1152,40 @@ String WebPortal::dashboardPage() const {
       }
     }
 
+    async function saveSystemConfig(event) {
+      event.preventDefault();
+      const params = new URLSearchParams();
+      params.set(
+          "statusPollIntervalMinutes",
+          document.getElementById("statusPollIntervalMinutes").value || String(defaultStatusPollIntervalMinutes));
+
+      try {
+        await api("/api/config", {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: params.toString()
+        });
+        await loadConfig();
+        setText("systemConfigStatus", "系统配置已保存。");
+      } catch (error) {
+        setText("systemConfigStatus", toMessage(error.message));
+      }
+    }
+
+    async function refreshAllStatusByButton() {
+      const button = document.getElementById("refreshAllButton");
+      const originalLabel = button.textContent;
+      button.disabled = true;
+      button.textContent = "刷新中...";
+      try {
+        await refreshAllStatus();
+        setText("systemConfigStatus", "状态已刷新。");
+      } finally {
+        button.disabled = false;
+        button.textContent = originalLabel;
+      }
+    }
+
     async function savePassword(event) {
       event.preventDefault();
       const params = new URLSearchParams(new FormData(event.target));
@@ -1053,22 +1215,19 @@ String WebPortal::dashboardPage() const {
     document.getElementById("powerButton").addEventListener("click", powerOn);
     document.getElementById("configForm").addEventListener("submit", saveConfig);
     document.getElementById("bemfaForm").addEventListener("submit", saveBemfaConfig);
+    document.getElementById("systemForm").addEventListener("submit", saveSystemConfig);
+    document.getElementById("refreshAllButton").addEventListener("click", refreshAllStatusByButton);
     document.getElementById("passwordForm").addEventListener("submit", savePassword);
 
     window.addEventListener("DOMContentLoaded", async function () {
-      const pollIntervalMs = 10000;
       updateScanButtonState();
       try {
         await loadConfig();
       } catch (error) {
         setText("configStatus", toMessage(error.message));
       }
-      await refreshSystemInfo();
-      await refreshBemfaStatus();
+      await refreshAllStatus();
       await scanWifi();
-      setInterval(refreshPowerStatus, pollIntervalMs);
-      setInterval(refreshBemfaStatus, pollIntervalMs);
-      setInterval(refreshSystemInfo, pollIntervalMs);
     });
   </script>
 </body>

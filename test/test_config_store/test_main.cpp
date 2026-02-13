@@ -81,6 +81,24 @@ void test_save_and_load_bemfa_config_roundtrip() {
   TEST_ASSERT_EQUAL_STRING(expected.topic.c_str(), actual.topic.c_str());
 }
 
+void test_load_default_system_config_values() {
+  ConfigStore store;
+  const SystemConfig config = store.loadSystemConfig();
+
+  TEST_ASSERT_EQUAL_UINT16(3, config.statusPollIntervalMinutes);
+}
+
+void test_save_and_load_system_config_roundtrip() {
+  ConfigStore store;
+  SystemConfig expected;
+  expected.statusPollIntervalMinutes = 30;
+
+  TEST_ASSERT_TRUE(store.saveSystemConfig(expected));
+
+  const SystemConfig actual = store.loadSystemConfig();
+  TEST_ASSERT_EQUAL_UINT16(expected.statusPollIntervalMinutes, actual.statusPollIntervalMinutes);
+}
+
 void setup() {
   Serial.begin(115200);
   delay(200);
@@ -90,6 +108,8 @@ void setup() {
   RUN_TEST(test_save_and_load_config_roundtrip);
   RUN_TEST(test_load_default_bemfa_config_values);
   RUN_TEST(test_save_and_load_bemfa_config_roundtrip);
+  RUN_TEST(test_load_default_system_config_values);
+  RUN_TEST(test_save_and_load_system_config_roundtrip);
   UNITY_END();
 }
 

@@ -17,6 +17,11 @@ struct BemfaConfig {
   String topic = "";
 };
 
+struct SystemConfig {
+  // 0 means manual refresh mode.
+  uint16_t statusPollIntervalMinutes = 3;
+};
+
 class ConfigStore {
  public:
   ConfigStore() = default;
@@ -25,6 +30,8 @@ class ConfigStore {
   bool saveComputerConfig(const ComputerConfig& config) const;
   BemfaConfig loadBemfaConfig() const;
   bool saveBemfaConfig(const BemfaConfig& config) const;
+  SystemConfig loadSystemConfig() const;
+  bool saveSystemConfig(const SystemConfig& config) const;
 
  private:
   static constexpr const char* kNamespace = "esp32app";
