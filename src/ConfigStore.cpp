@@ -15,9 +15,17 @@ constexpr const char* kBemfaKeyKey = "bemfa_key";
 constexpr const char* kBemfaTopicKey = "bemfa_topic";
 
 constexpr const char* kStatusPollIntervalMinutesKey = "poll_min";
+constexpr const char* kOtaAutoCheckEnabledKey = "ota_auto_en";
+constexpr const char* kOtaAutoCheckIntervalMinutesKey = "ota_auto_min";
+constexpr const char* kOtaInstalledVersionCodeKey = "ota_ver";
 
 bool isValidStatusPollIntervalMinutes(uint16_t value) {
   return value == 0 || value == 1 || value == 3 || value == 10 || value == 30 || value == 60;
+}
+
+bool isValidOtaAutoCheckIntervalMinutes(uint16_t value) {
+  return value == 5 || value == 10 || value == 30 || value == 60 || value == 180 ||
+         value == 360 || value == 720 || value == 1440;
 }
 }  // namespace
 
@@ -108,6 +116,15 @@ SystemConfig ConfigStore::loadSystemConfig() const {
   if (!isValidStatusPollIntervalMinutes(config.statusPollIntervalMinutes)) {
     config.statusPollIntervalMinutes = 3;
   }
+  config.otaAutoCheckEnabled =
+      preferences.getBool(kOtaAutoCheckEnabledKey, config.otaAutoCheckEnabled);
+  config.otaAutoCheckIntervalMinutes = preferences.getUShort(kOtaAutoCheckIntervalMinutesKey,
+                                                             config.otaAutoCheckIntervalMinutes);
+  if (!isValidOtaAutoCheckIntervalMinutes(config.otaAutoCheckIntervalMinutes)) {
+    config.otaAutoCheckIntervalMinutes = 60;
+  }
+  config.otaInstalledVersionCode =
+      preferences.getInt(kOtaInstalledVersionCodeKey, config.otaInstalledVersionCode);
 
   preferences.end();
   return config;
@@ -124,6 +141,14 @@ bool ConfigStore::saveSystemConfig(const SystemConfig& config) const {
     normalizedIntervalMinutes = 3;
   }
   preferences.putUShort(kStatusPollIntervalMinutesKey, normalizedIntervalMinutes);
+
+  uint16_t normalizedOtaAutoIntervalMinutes = config.otaAutoCheckIntervalMinutes;
+  if (!isValidOtaAutoCheckIntervalMinutes(normalizedOtaAutoIntervalMinutes)) {
+    normalizedOtaAutoIntervalMinutes = 60;
+  }
+  preferences.putBool(kOtaAutoCheckEnabledKey, config.otaAutoCheckEnabled);
+  preferences.putUShort(kOtaAutoCheckIntervalMinutesKey, normalizedOtaAutoIntervalMinutes);
+  preferences.putInt(kOtaInstalledVersionCodeKey, config.otaInstalledVersionCode);
 
   preferences.end();
   return true;

@@ -86,17 +86,27 @@ void test_load_default_system_config_values() {
   const SystemConfig config = store.loadSystemConfig();
 
   TEST_ASSERT_EQUAL_UINT16(3, config.statusPollIntervalMinutes);
+  TEST_ASSERT_FALSE(config.otaAutoCheckEnabled);
+  TEST_ASSERT_EQUAL_UINT16(60, config.otaAutoCheckIntervalMinutes);
+  TEST_ASSERT_EQUAL_INT32(-1, config.otaInstalledVersionCode);
 }
 
 void test_save_and_load_system_config_roundtrip() {
   ConfigStore store;
   SystemConfig expected;
   expected.statusPollIntervalMinutes = 30;
+  expected.otaAutoCheckEnabled = true;
+  expected.otaAutoCheckIntervalMinutes = 180;
+  expected.otaInstalledVersionCode = 6;
 
   TEST_ASSERT_TRUE(store.saveSystemConfig(expected));
 
   const SystemConfig actual = store.loadSystemConfig();
   TEST_ASSERT_EQUAL_UINT16(expected.statusPollIntervalMinutes, actual.statusPollIntervalMinutes);
+  TEST_ASSERT_EQUAL(expected.otaAutoCheckEnabled, actual.otaAutoCheckEnabled);
+  TEST_ASSERT_EQUAL_UINT16(expected.otaAutoCheckIntervalMinutes,
+                           actual.otaAutoCheckIntervalMinutes);
+  TEST_ASSERT_EQUAL_INT32(expected.otaInstalledVersionCode, actual.otaInstalledVersionCode);
 }
 
 void setup() {

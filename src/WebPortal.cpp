@@ -79,13 +79,15 @@ WebPortal::WebPortal(uint16_t port,
                      WifiService& wifiService,
                      ConfigStore& configStore,
                      PowerOnService& powerOnService,
-                     BemfaService& bemfaService)
+                     BemfaService& bemfaService,
+                     FirmwareUpgradeService& firmwareUpgradeService)
     : _server(port),
       _authService(authService),
       _wifiService(wifiService),
       _configStore(configStore),
       _powerOnService(powerOnService),
-      _bemfaService(bemfaService) {}
+      _bemfaService(bemfaService),
+      _firmwareUpgradeService(firmwareUpgradeService) {}
 
 void WebPortal::begin() {
   registerRoutes();
@@ -149,6 +151,8 @@ void WebPortal::registerRoutes() {
     const SystemConfig systemConfig = _configStore.loadSystemConfig();
     const BemfaRuntimeStatus bemfaStatus = _bemfaService.getStatus();
     const PowerOnStatus power = _powerOnService.getStatus();
+    const String otaCurrentVersion =
+        systemConfig.otaInstalledVersionCode >= 0 ? String(systemConfig.otaInstalledVersionCode) : "-";
 
     String body = "{";
     body += "\"computerIp\":\"" + jsonEscape(config.ip) + "\",";
@@ -169,8 +173,11 @@ void WebPortal::registerRoutes() {
     body += "\"bemfaConnected\":" + String(bemfaStatus.mqttConnected ? "true" : "false") + ",";
     body += "\"bemfaState\":\"" + jsonEscape(bemfaStatus.state) + "\",";
     body += "\"bemfaMessage\":\"" + jsonEscape(bemfaStatus.message) + "\",";
-    body +=
-        "\"statusPollIntervalMinutes\":" + String(systemConfig.statusPollIntervalMinutes);
+    body += "\"statusPollIntervalMinutes\":" + String(systemConfig.statusPollIntervalMinutes) + ",";
+    body += "\"otaCurrentVersion\":\"" + jsonEscape(otaCurrentVersion) + "\",";
+    body += "\"otaAutoCheckEnabled\":false,";
+    body += "\"otaAutoCheckIntervalMinutes\":" +
+            String(systemConfig.otaAutoCheckIntervalMinutes);
     body += "}";
 
     request->send(200, "application/json", body);
@@ -239,6 +246,7 @@ void WebPortal::registerRoutes() {
       systemConfig.statusPollIntervalMinutes =
           parseStatusPollIntervalMinutes(rawInterval, systemConfig.statusPollIntervalMinutes);
     }
+    systemConfig.otaAutoCheckEnabled = false;
 
     const bool computerSaved = _configStore.saveComputerConfig(config);
     const bool bemfaSaved = _configStore.saveBemfaConfig(bemfaConfig);
@@ -249,6 +257,9 @@ void WebPortal::registerRoutes() {
     }
 
     _bemfaService.updateConfig(bemfaConfig);
+    _firmwareUpgradeService.updateConfig(bemfaConfig);
+    _firmwareUpgradeService.updateAutoCheckConfig(false,
+                                                  systemConfig.otaAutoCheckIntervalMinutes);
     request->send(200, "application/json", "{\"success\":true}");
   });
 
@@ -346,6 +357,102 @@ void WebPortal::registerRoutes() {
     body += "}";
 
     request->send(200, "application/json", body);
+  });
+
+  _server.on("/api/ota/status", HTTP_GET, [this](AsyncWebServerRequest* request) {
+    if (!ensureAuthorized(request, true)) {
+      return;
+    }
+
+    const FirmwareUpgradeStatus status = _firmwareUpgradeService.getStatus();
+    String body = "{";
+    body += "\"configured\":" + String(status.configured ? "true" : "false") + ",";
+    body += "\"wifiConnected\":" + String(status.wifiConnected ? "true" : "false") + ",";
+    body += "\"busy\":" + String(status.busy ? "true" : "false") + ",";
+    body += "\"pending\":" + String(status.pending ? "true" : "false") + ",";
+    body += "\"updateAvailable\":" + String(status.updateAvailable ? "true" : "false") + ",";
+    body += "\"autoCheckEnabled\":" + String(status.autoCheckEnabled ? "true" : "false") + ",";
+    body += "\"autoCheckIntervalMinutes\":" + String(status.autoCheckIntervalMinutes) + ",";
+    body += "\"nextAutoCheckInMs\":" + String(status.nextAutoCheckInMs) + ",";
+    body += "\"progressPercent\":" + String(status.progressPercent) + ",";
+    body += "\"progressBytes\":" + String(status.progressBytes) + ",";
+    body += "\"progressTotalBytes\":" + String(status.progressTotalBytes) + ",";
+    body += "\"trigger\":\"" + jsonEscape(status.trigger) + "\",";
+    body += "\"state\":\"" + jsonEscape(status.state) + "\",";
+    body += "\"message\":\"" + jsonEscape(status.message) + "\",";
+    body += "\"error\":\"" + jsonEscape(status.lastError) + "\",";
+    body += "\"currentVersion\":\"" + jsonEscape(status.currentVersion) + "\",";
+    body += "\"targetVersion\":\"" + jsonEscape(status.targetVersion) + "\",";
+    body += "\"targetTag\":\"" + jsonEscape(status.targetTag) + "\",";
+    body += "\"lastAutoCheckAtMs\":" + String(status.lastAutoCheckAtMs) + ",";
+    body += "\"lastProgressAtMs\":" + String(status.lastProgressAtMs) + ",";
+    body += "\"lastCheckAtMs\":" + String(status.lastCheckAtMs) + ",";
+    body += "\"lastStartAtMs\":" + String(status.lastStartAtMs) + ",";
+    body += "\"lastFinishAtMs\":" + String(status.lastFinishAtMs);
+    body += "}";
+
+    request->send(200, "application/json", body);
+  });
+
+  _server.on("/api/ota/check", HTTP_POST, [this](AsyncWebServerRequest* request) {
+    if (!ensureAuthorized(request, true)) {
+      return;
+    }
+
+    String errorCode;
+    const bool accepted =
+        _firmwareUpgradeService.requestManualCheck(_wifiService.isConnected(), &errorCode);
+    const FirmwareUpgradeStatus status = _firmwareUpgradeService.getStatus();
+
+    String body = "{";
+    body += "\"success\":" + String(accepted ? "true" : "false") + ",";
+    body += "\"state\":\"" + jsonEscape(status.state) + "\",";
+    body += "\"message\":\"" + jsonEscape(status.message) + "\",";
+    body += "\"error\":\"" + jsonEscape(errorCode.isEmpty() ? status.lastError : errorCode) + "\"";
+    body += "}";
+
+    request->send(accepted ? 202 : 400, "application/json", body);
+  });
+
+  _server.on("/api/ota/upgrade", HTTP_POST, [this](AsyncWebServerRequest* request) {
+    if (!ensureAuthorized(request, true)) {
+      return;
+    }
+
+    String errorCode;
+    const bool accepted =
+        _firmwareUpgradeService.requestManualUpgrade(_wifiService.isConnected(), &errorCode);
+    const FirmwareUpgradeStatus status = _firmwareUpgradeService.getStatus();
+
+    String body = "{";
+    body += "\"success\":" + String(accepted ? "true" : "false") + ",";
+    body += "\"state\":\"" + jsonEscape(status.state) + "\",";
+    body += "\"message\":\"" + jsonEscape(status.message) + "\",";
+    body += "\"error\":\"" + jsonEscape(errorCode.isEmpty() ? status.lastError : errorCode) + "\"";
+    body += "}";
+
+    request->send(accepted ? 202 : 400, "application/json", body);
+  });
+
+  // Keep backward compatibility with old endpoint.
+  _server.on("/api/ota/manual", HTTP_POST, [this](AsyncWebServerRequest* request) {
+    if (!ensureAuthorized(request, true)) {
+      return;
+    }
+
+    String errorCode;
+    const bool accepted =
+        _firmwareUpgradeService.requestManualUpgrade(_wifiService.isConnected(), &errorCode);
+    const FirmwareUpgradeStatus status = _firmwareUpgradeService.getStatus();
+
+    String body = "{";
+    body += "\"success\":" + String(accepted ? "true" : "false") + ",";
+    body += "\"state\":\"" + jsonEscape(status.state) + "\",";
+    body += "\"message\":\"" + jsonEscape(status.message) + "\",";
+    body += "\"error\":\"" + jsonEscape(errorCode.isEmpty() ? status.lastError : errorCode) + "\"";
+    body += "}";
+
+    request->send(accepted ? 202 : 400, "application/json", body);
   });
 
   _server.on("/api/system/info", HTTP_GET, [this](AsyncWebServerRequest* request) {
@@ -637,7 +744,6 @@ String WebPortal::dashboardPage() const {
         <div class="metric"><span class="metric-title">最大可分配块</span><span id="espHeapMaxAlloc" class="metric-value">-</span></div>
         <div class="metric"><span class="metric-title">Flash 已用/总量</span><span id="espFlash" class="metric-value">-</span></div>
         <div class="metric"><span class="metric-title">Flash 剩余</span><span id="espFlashFree" class="metric-value">-</span></div>
-        <div class="metric"><span class="metric-title">PSRAM 空闲/总量</span><span id="espPsram" class="metric-value">-</span></div>
       </div>
       <p id="espInfoStatus" class="status"></p>
     </section>
@@ -701,6 +807,19 @@ String WebPortal::dashboardPage() const {
     </section>
 
     <section>
+      <h2>固件 OTA 升级</h2>
+      <p class="muted">状态：<strong id="otaState">-</strong></p>
+      <p class="muted">下载进度：<strong id="otaProgress">0%</strong></p>
+      <p class="muted">当前版本：<span id="otaCurrentVersion" class="code">-</span></p>
+      <p class="muted">目标版本：<span id="otaTargetVersion" class="code">-</span></p>
+      <div class="inline-actions">
+        <button id="otaCheckButton" class="secondary" type="button">手动检测新版本</button>
+        <button id="otaUpgradeButton" type="button" hidden>升级固件</button>
+      </div>
+      <p id="otaStatus" class="status"></p>
+    </section>
+
+    <section>
       <h2>修改登录密码</h2>
       <form id="passwordForm">
         <div class="row">
@@ -725,12 +844,17 @@ String WebPortal::dashboardPage() const {
 
   <script>
     function setText(id, text) {
-      document.getElementById(id).textContent = text || "";
+      const element = document.getElementById(id);
+      if (!element) {
+        return;
+      }
+      element.textContent = text || "";
     }
 
     const defaultStatusPollIntervalMinutes = 3;
     const allowedStatusPollIntervals = [1, 3, 10, 30, 60];
     let statusPollTimer = 0;
+    let otaActionPollTimer = 0;
 
     function normalizeStatusPollIntervalMinutes(value) {
       const minutes = Number(value);
@@ -762,6 +886,21 @@ String WebPortal::dashboardPage() const {
         clearInterval(statusPollTimer);
         statusPollTimer = 0;
       }
+    }
+
+    function startOtaActionPolling() {
+      if (otaActionPollTimer) {
+        return;
+      }
+      otaActionPollTimer = setInterval(refreshOtaStatus, 2000);
+    }
+
+    function stopOtaActionPolling() {
+      if (!otaActionPollTimer) {
+        return;
+      }
+      clearInterval(otaActionPollTimer);
+      otaActionPollTimer = 0;
     }
 
     function applyStatusPolling(minutes) {
@@ -803,7 +942,7 @@ String WebPortal::dashboardPage() const {
       if (code === "persist_failed") return "保存失败，请稍后重试。";
       if (code === "unauthorized") return "登录已失效，请重新登录。";
       if (code === "ssid_required") return "SSID 不能为空。";
-      if (code === "wifi_not_connected") return "WiFi 未连接，无法远程开机。";
+      if (code === "wifi_not_connected") return "WiFi 未连接，无法执行该操作。";
       if (code === "config_mac_required") return "请先配置目标电脑 MAC 地址。";
       if (code === "config_ip_invalid") return "请先配置正确的目标电脑 IP 地址。";
       if (code === "wol_send_failed") return "发送开机包失败，请检查网络环境。";
@@ -811,6 +950,17 @@ String WebPortal::dashboardPage() const {
       if (code === "boot_timeout") return "等待主机上线超时。";
       if (code === "already_booting") return "开机流程进行中，请稍候。";
       if (code === "already_on") return "主机已经在线。";
+      if (code === "ota_busy") return "OTA 任务执行中，请稍后再试。";
+      if (code === "ota_too_frequent") return "手动升级触发过于频繁，请稍后重试。";
+      if (code === "ota_config_incomplete") return "OTA 配置不完整，请先填写巴法云 UID 和 Topic。";
+      if (code === "ota_no_update") return "巴法云未发布可用新固件。";
+      if (code === "ota_lookup_http_failed") return "查询巴法云 OTA 失败，请检查网络。";
+      if (code === "ota_lookup_http_status") return "巴法云 OTA 接口返回异常状态码。";
+      if (code === "ota_lookup_parse_failed") return "解析巴法云 OTA 响应失败。";
+      if (code === "ota_lookup_rejected") return "巴法云 OTA 拒绝了请求。";
+      if (code === "ota_version_invalid") return "巴法云 OTA 返回的版本号无效。";
+      if (code === "ota_url_missing") return "巴法云 OTA 响应缺少固件地址。";
+      if (code === "ota_update_failed") return "固件更新失败，请查看设备日志。";
       return code || "请求失败";
     }
 
@@ -872,6 +1022,110 @@ String WebPortal::dashboardPage() const {
       }
     }
 
+    function otaStateLabel(state) {
+      if (state === "WAIT_CONFIG") return "配置不完整";
+      if (state === "READY") return "可手动升级";
+      if (state === "QUEUED") return "已排队";
+      if (state === "CHECKING") return "检测中";
+      if (state === "UPDATE_AVAILABLE") return "发现新版本";
+      if (state === "DOWNLOADING") return "升级中";
+      if (state === "UPDATED") return "升级成功";
+      if (state === "NO_UPDATE") return "无新版本";
+      if (state === "FAILED") return "失败";
+      return state || "-";
+    }
+    function otaMessageLabel(message) {
+      if (!message) return "";
+      if (message === "OTA requires Bemfa UID and Topic.") return "OTA 配置不完整，请先填写巴法云 UID 和主题。";
+      if (message === "Manual OTA is ready.") return "可手动升级。";
+      if (message === "Auto OTA check is enabled.") return "已启用 OTA 自动检测。";
+      if (message === "Auto OTA settings updated.") return "OTA 自动检测配置已更新。";
+      if (message === "WiFi is disconnected.") return "WiFi 未连接。";
+      if (message === "Checking firmware metadata from Bemfa.") return "正在查询巴法云固件信息。";
+      if (message === "Downloading and applying firmware.") return "正在下载并更新固件。";
+      if (message === "Auto OTA request queued.") return "已加入自动 OTA 升级检测队列。";
+      if (message === "Manual OTA request queued.") return "已加入手动 OTA 升级检测队列。";
+      if (message === "Auto OTA check request queued.") return "已加入自动 OTA 检测队列。";
+      if (message === "Manual OTA check request queued.") return "已加入手动 OTA 检测队列。";
+      if (message === "Auto OTA upgrade request queued.") return "已加入自动 OTA 升级队列。";
+      if (message === "Manual OTA upgrade request queued.") return "已加入手动 OTA 升级队列。";
+      if (message === "No OTA package is published on Bemfa.") return "巴法云未发布可用新固件。";
+      if (message === "OTA package found on Bemfa.") return "检测到巴法云可用固件。";
+      if (message === "Firmware update completed, rebooting.") return "固件升级完成，设备即将重启。";
+      if (message === "No new firmware to apply.") return "没有可应用的新固件。";
+      if (message === "Failed to parse Bemfa OTA response code.") return "解析巴法云 OTA 响应失败。";
+      if (message === "Failed to open Bemfa OTA endpoint.") return "无法连接巴法云 OTA 接口。";
+      if (message === "Bemfa OTA response does not contain firmware URL.") return "巴法云 OTA 响应缺少固件下载地址。";
+      if (message.indexOf("New firmware available. Local=") === 0) {
+        return "检测到新固件：" +
+            message.replace("New firmware available. ", "")
+                   .replace("Local=", "本地=")
+                   .replace("remote=", "远端=");
+      }
+      if (message.indexOf("No newer firmware version. Local=") === 0) {
+        return "当前已是最新版本：" +
+            message.replace("No newer firmware version. ", "")
+                   .replace("Local=", "本地=")
+                   .replace("remote=", "远端=");
+      }
+      if (message.indexOf("Downloading firmware (") === 0) {
+        const start = message.indexOf("(");
+        const end = message.indexOf(")", start + 1);
+        const percent = (start >= 0 && end > start) ? message.substring(start + 1, end) : "";
+        return percent ? ("正在下载固件（" + percent + "）") : "正在下载固件...";
+      }
+      if (message.indexOf("Firmware update failed: ") === 0) {
+        return "固件升级失败：" + message.replace("Firmware update failed: ", "");
+      }
+      if (message.indexOf("Bemfa OTA request failed, code=") === 0) {
+        return "查询巴法云 OTA 失败，错误码：" + message.replace("Bemfa OTA request failed, code=", "");
+      }
+      if (message.indexOf("Bemfa OTA rejected request, code=") === 0) {
+        return "巴法云 OTA 拒绝请求，错误码：" + message.replace("Bemfa OTA rejected request, code=", "");
+      }
+      if (message.indexOf("Bemfa OTA HTTP status is ") === 0) {
+        return "巴法云 OTA 接口状态异常：" + message.replace("Bemfa OTA HTTP status is ", "");
+      }
+      return message;
+    }
+    function updateOtaStatus(data) {
+      const state = data.state || "-";
+      const message = data.message || "";
+      const error = data.error || "";
+      const targetVersion = data.targetVersion || "";
+      const targetTag = data.targetTag || "";
+      const progressPercent = Math.max(0, Math.min(100, Number(data.progressPercent) || 0));
+      const progressBytes = Number(data.progressBytes) || 0;
+      const progressTotalBytes = Number(data.progressTotalBytes) || 0;
+      const busy = !!data.busy || !!data.pending;
+      const updateAvailable = !!data.updateAvailable;
+
+      setText("otaState", otaStateLabel(state));
+      if (progressTotalBytes > 0) {
+        setText("otaProgress", String(progressPercent) + "% (" + formatBytes(progressBytes) + " / " + formatBytes(progressTotalBytes) + ")");
+      } else {
+        setText("otaProgress", String(progressPercent) + "%");
+      }
+      setText(
+          "otaTargetVersion",
+          (targetVersion || targetTag) ? ((targetVersion || "-") + (targetTag ? (" (" + targetTag + ")") : "")) : "-");
+      setText("otaStatus", error ? toMessage(error) : otaMessageLabel(message));
+
+      if (busy) {
+        startOtaActionPolling();
+      } else {
+        stopOtaActionPolling();
+      }
+
+      const checkButton = document.getElementById("otaCheckButton");
+      const upgradeButton = document.getElementById("otaUpgradeButton");
+      checkButton.disabled = busy;
+      checkButton.textContent = busy ? "处理中..." : "手动检测新版本";
+
+      upgradeButton.hidden = !updateAvailable;
+      upgradeButton.disabled = busy;
+      upgradeButton.textContent = busy ? "升级中..." : "升级固件";
+    }
     function formatBytes(value) {
       const bytes = Number(value);
       if (!Number.isFinite(bytes) || bytes < 0) {
@@ -996,6 +1250,7 @@ String WebPortal::dashboardPage() const {
       document.getElementById("bemfaKey").value = data.bemfaKey || "";
       document.getElementById("bemfaHost").value = data.bemfaHost || "bemfa.com";
       document.getElementById("bemfaPort").value = data.bemfaPort || 9501;
+      setText("otaCurrentVersion", data.otaCurrentVersion || "-");
 
       updatePowerStatus(data);
       updateBemfaStatus(data);
@@ -1035,8 +1290,17 @@ String WebPortal::dashboardPage() const {
       }
     }
 
+    async function refreshOtaStatus() {
+      try {
+        const data = await api("/api/ota/status");
+        updateOtaStatus(data);
+      } catch (error) {
+        setText("otaStatus", toMessage(error.message));
+      }
+    }
+
     async function refreshAllStatus() {
-      await Promise.all([refreshPowerStatus(), refreshBemfaStatus(), refreshSystemInfo()]);
+      await Promise.all([refreshPowerStatus(), refreshBemfaStatus(), refreshOtaStatus(), refreshSystemInfo()]);
     }
 
     async function powerOn() {
@@ -1051,6 +1315,37 @@ String WebPortal::dashboardPage() const {
       }
     }
 
+    async function triggerManualOtaCheck() {
+      const button = document.getElementById("otaCheckButton");
+      button.disabled = true;
+      button.textContent = "提交中...";
+
+      try {
+        const data = await api("/api/ota/check", { method: "POST" });
+        setText("otaStatus", otaMessageLabel(data.message) || "已提交 OTA 检测请求。");
+        startOtaActionPolling();
+        await refreshOtaStatus();
+      } catch (error) {
+        setText("otaStatus", toMessage(error.message));
+        await refreshOtaStatus();
+      }
+    }
+
+    async function triggerManualOtaUpgrade() {
+      const button = document.getElementById("otaUpgradeButton");
+      button.disabled = true;
+      button.textContent = "提交中...";
+
+      try {
+        const data = await api("/api/ota/upgrade", { method: "POST" });
+        setText("otaStatus", otaMessageLabel(data.message) || "已提交 OTA 升级请求。");
+        startOtaActionPolling();
+        await refreshOtaStatus();
+      } catch (error) {
+        setText("otaStatus", toMessage(error.message));
+        await refreshOtaStatus();
+      }
+    }
     async function scanWifi() {
       if (wifiScanRequesting) {
         return;
@@ -1213,6 +1508,8 @@ String WebPortal::dashboardPage() const {
     document.getElementById("scanButton").addEventListener("click", scanWifi);
     document.getElementById("connectButton").addEventListener("click", connectWifi);
     document.getElementById("powerButton").addEventListener("click", powerOn);
+    document.getElementById("otaCheckButton").addEventListener("click", triggerManualOtaCheck);
+    document.getElementById("otaUpgradeButton").addEventListener("click", triggerManualOtaUpgrade);
     document.getElementById("configForm").addEventListener("submit", saveConfig);
     document.getElementById("bemfaForm").addEventListener("submit", saveBemfaConfig);
     document.getElementById("systemForm").addEventListener("submit", saveSystemConfig);

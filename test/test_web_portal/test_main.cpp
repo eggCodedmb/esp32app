@@ -4,6 +4,7 @@
 #include "AuthService.h"
 #include "BemfaService.h"
 #include "ConfigStore.h"
+#include "FirmwareUpgradeService.h"
 #include "HostProbeService.h"
 #include "PowerOnService.h"
 #include "WakeOnLanService.h"
@@ -18,7 +19,8 @@ WakeOnLanService wol;
 HostProbeService probe;
 PowerOnService powerOnService(wol, probe);
 BemfaService bemfaService;
-WebPortal portal(80, auth, wifi, config, powerOnService, bemfaService);
+FirmwareUpgradeService firmwareUpgradeService;
+WebPortal portal(80, auth, wifi, config, powerOnService, bemfaService, firmwareUpgradeService);
 }  // namespace
 
 void setUp() {}
@@ -56,8 +58,20 @@ void test_dashboard_page_contains_config_and_password_sections() {
   TEST_ASSERT_TRUE(page.indexOf("/api/power/status") >= 0);
   TEST_ASSERT_TRUE(page.indexOf("/api/system/info") >= 0);
   TEST_ASSERT_TRUE(page.indexOf("/api/bemfa/status") >= 0);
+  TEST_ASSERT_TRUE(page.indexOf("/api/ota/status") >= 0);
+  TEST_ASSERT_TRUE(page.indexOf("/api/ota/check") >= 0);
+  TEST_ASSERT_TRUE(page.indexOf("/api/ota/upgrade") >= 0);
+  TEST_ASSERT_TRUE(page.indexOf("/api/ota/manual") >= 0);
   TEST_ASSERT_TRUE(page.indexOf("bemfaForm") >= 0);
   TEST_ASSERT_TRUE(page.indexOf("bemfaTopic") >= 0);
+  TEST_ASSERT_TRUE(page.indexOf("otaCheckButton") >= 0);
+  TEST_ASSERT_TRUE(page.indexOf("otaUpgradeButton") >= 0);
+  TEST_ASSERT_TRUE(page.indexOf("otaProgress") >= 0);
+  TEST_ASSERT_TRUE(page.indexOf("otaCurrentVersion") >= 0);
+  TEST_ASSERT_TRUE(page.indexOf("otaTrigger") < 0);
+  TEST_ASSERT_TRUE(page.indexOf("otaAutoNext") < 0);
+  TEST_ASSERT_TRUE(page.indexOf("otaAutoCheckEnabled") < 0);
+  TEST_ASSERT_TRUE(page.indexOf("otaAutoCheckIntervalMinutes") < 0);
   TEST_ASSERT_TRUE(page.indexOf("systemForm") >= 0);
   TEST_ASSERT_TRUE(page.indexOf("statusPollIntervalMinutes") >= 0);
   TEST_ASSERT_TRUE(page.indexOf("refreshAllButton") >= 0);

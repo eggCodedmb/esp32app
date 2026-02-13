@@ -6,6 +6,7 @@
 #include "AuthService.h"
 #include "BemfaService.h"
 #include "ConfigStore.h"
+#include "FirmwareUpgradeService.h"
 #include "PowerOnService.h"
 #include "WifiService.h"
 
@@ -16,7 +17,8 @@ class WebPortal {
             WifiService& wifiService,
             ConfigStore& configStore,
             PowerOnService& powerOnService,
-            BemfaService& bemfaService);
+            BemfaService& bemfaService,
+            FirmwareUpgradeService& firmwareUpgradeService);
 
   void begin();
 
@@ -36,6 +38,7 @@ class WebPortal {
   ConfigStore& _configStore;
   PowerOnService& _powerOnService;
   BemfaService& _bemfaService;
+  FirmwareUpgradeService& _firmwareUpgradeService;
 
   void registerRoutes();
   bool ensureAuthorized(AsyncWebServerRequest* request, bool apiRequest) const;

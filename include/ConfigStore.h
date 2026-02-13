@@ -20,6 +20,11 @@ struct BemfaConfig {
 struct SystemConfig {
   // 0 means manual refresh mode.
   uint16_t statusPollIntervalMinutes = 3;
+  bool otaAutoCheckEnabled = false;
+  // Default auto-check interval when enabled.
+  uint16_t otaAutoCheckIntervalMinutes = 60;
+  // Persisted installed OTA version code from Bemfa API field `v`.
+  int32_t otaInstalledVersionCode = -1;
 };
 
 class ConfigStore {

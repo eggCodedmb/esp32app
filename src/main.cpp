@@ -4,6 +4,7 @@
 #include "AuthService.h"
 #include "BemfaService.h"
 #include "ConfigStore.h"
+#include "FirmwareUpgradeService.h"
 #include "HostProbeService.h"
 #include "PowerOnService.h"
 #include "WakeOnLanService.h"
@@ -21,7 +22,14 @@ WakeOnLanService wakeOnLanService;
 HostProbeService hostProbeService;
 PowerOnService powerOnService(wakeOnLanService, hostProbeService);
 BemfaService bemfaService;
-WebPortal webPortal(80, authService, wifiService, configStore, powerOnService, bemfaService);
+FirmwareUpgradeService firmwareUpgradeService;
+WebPortal webPortal(80,
+                    authService,
+                    wifiService,
+                    configStore,
+                    powerOnService,
+                    bemfaService,
+                    firmwareUpgradeService);
 bool setupApRunning = false;
 bool wifiStateInitialized = false;
 bool lastWifiConnected = false;
@@ -29,6 +37,26 @@ String lastReportedPowerState = "";
 
 bool isPowerOnCommand(const String& command) {
   return command == "on" || command == "1" || command == "start" || command == "wake";
+}
+
+bool isOtaCommand(const String& command) {
+  return command == "ota" || command == "upgrade" || command == "update";
+}
+
+void onFirmwareUpgradeEvent(const FirmwareUpgradeStatus& status, void* context) {
+  BemfaService* bemfa = static_cast<BemfaService*>(context);
+  if (bemfa == nullptr || !bemfa->isConnected()) {
+    return;
+  }
+
+  String payload = "ota:" + status.state;
+  if (status.progressTotalBytes > 0) {
+    payload += ",progress:" + String(status.progressPercent);
+  }
+  if (!status.lastError.isEmpty()) {
+    payload += ",error:" + status.lastError;
+  }
+  bemfa->publishStatus(payload);
 }
 
 void handleBemfaCommand(bool wifiConnected) {
@@ -42,7 +70,26 @@ void handleBemfaCommand(bool wifiConnected) {
 
   if (command == "status") {
     const PowerOnStatus status = powerOnService.getStatus();
-    bemfaService.publishStatus("power:" + status.stateText);
+    const FirmwareUpgradeStatus otaStatus = firmwareUpgradeService.getStatus();
+    String payload = "power:" + status.stateText + ",ota:" + otaStatus.state;
+    if (otaStatus.progressTotalBytes > 0) {
+      payload += ",progress:" + String(otaStatus.progressPercent);
+    }
+    bemfaService.publishStatus(payload);
+    return;
+  }
+
+  if (isOtaCommand(command)) {
+    String errorCode;
+    const bool accepted = firmwareUpgradeService.requestManualUpgrade(wifiConnected, &errorCode);
+    if (!accepted) {
+      const FirmwareUpgradeStatus otaStatus = firmwareUpgradeService.getStatus();
+      const String normalizedError = errorCode.isEmpty() ? otaStatus.lastError : errorCode;
+      bemfaService.publishStatus("ota:" + otaStatus.state + ",error:" + normalizedError);
+      return;
+    }
+
+    bemfaService.publishStatus("ota:QUEUED");
     return;
   }
 
@@ -144,7 +191,15 @@ void setup() {
 
   syncSetupAccessPoint(wifiService.isConnected());
   bemfaService.begin();
-  bemfaService.updateConfig(configStore.loadBemfaConfig());
+  firmwareUpgradeService.setEventCallback(onFirmwareUpgradeEvent, &bemfaService);
+  firmwareUpgradeService.begin();
+
+  const BemfaConfig bemfaConfig = configStore.loadBemfaConfig();
+  const SystemConfig systemConfig = configStore.loadSystemConfig();
+  bemfaService.updateConfig(bemfaConfig);
+  firmwareUpgradeService.updateConfig(bemfaConfig);
+  firmwareUpgradeService.updateAutoCheckConfig(false,
+                                               systemConfig.otaAutoCheckIntervalMinutes);
   lastReportedPowerState = "";
   webPortal.begin();
 
@@ -156,6 +211,7 @@ void loop() {
   syncSetupAccessPoint(wifiConnected);
   powerOnService.tick(wifiConnected);
   bemfaService.tick(wifiConnected);
+  firmwareUpgradeService.tick(wifiConnected);
   handleBemfaCommand(wifiConnected);
   reportPowerStateIfChanged();
   delay(100);
