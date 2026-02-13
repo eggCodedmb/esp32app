@@ -5,7 +5,7 @@
 
 #include "AuthService.h"
 #include "ConfigStore.h"
-#include "DeviceStateService.h"
+#include "PowerOnService.h"
 #include "WifiService.h"
 
 class WebPortal {
@@ -14,16 +14,25 @@ class WebPortal {
             AuthService& authService,
             WifiService& wifiService,
             ConfigStore& configStore,
-            DeviceStateService& deviceState);
+            PowerOnService& powerOnService);
 
   void begin();
+
+#ifdef UNIT_TEST
+  static String testJsonEscape(const String& value) { return jsonEscape(value); }
+  static bool testParseBoolValue(const String& value, bool defaultValue = false) {
+    return parseBoolValue(value, defaultValue);
+  }
+  String testLoginPage(const String& errorMessage = "") const { return loginPage(errorMessage); }
+  String testDashboardPage() const { return dashboardPage(); }
+#endif
 
  private:
   AsyncWebServer _server;
   AuthService& _authService;
   WifiService& _wifiService;
   ConfigStore& _configStore;
-  DeviceStateService& _deviceState;
+  PowerOnService& _powerOnService;
 
   void registerRoutes();
   bool ensureAuthorized(AsyncWebServerRequest* request, bool apiRequest) const;

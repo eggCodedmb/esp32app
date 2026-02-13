@@ -1,33 +1,142 @@
 #include "WifiService.h"
 
 #include <WiFi.h>
+#include <algorithm>
 
-std::vector<WifiNetworkInfo> WifiService::scanNetworks() {
+namespace {
+constexpr int kWifiScanRunning = WIFI_SCAN_RUNNING;
+constexpr int kWifiScanFailed = WIFI_SCAN_FAILED;
+}  // namespace
+
+WifiScanResult WifiService::scanNetworks() {
   WiFi.mode(WIFI_AP_STA);
 
-  std::vector<WifiNetworkInfo> networks;
-  const int count = WiFi.scanNetworks(false, true);
-  if (count <= 0) {
+  const uint32_t previousScanAtMs = _lastScanAtMs;
+  const bool refreshed = finalizeScanIfReady();
+
+  WifiScanResult result;
+  result.fromCache = true;
+  result.scanInProgress = _scanInProgress;
+  result.ageMs = _hasScanCache ? (millis() - _lastScanAtMs) : 0;
+
+  if (!_hasScanCache || result.ageMs >= kScanCacheTtlMs) {
+    if (!_scanInProgress) {
+      startAsyncScan();
+    }
+    result.scanInProgress = _scanInProgress;
+  }
+
+  if (_hasScanCache) {
+    const bool immediateRefresh = _lastScanAtMs != previousScanAtMs;
+    result.networks = _cachedNetworks;
+    result.ageMs = millis() - _lastScanAtMs;
+    result.fromCache = !(refreshed || immediateRefresh);
+    return result;
+  }
+
+  result.fromCache = false;
+  return result;
+}
+
+void WifiService::startAsyncScan() {
+  WiFi.scanDelete();
+
+  const int startResult = WiFi.scanNetworks(true, true);
+  if (startResult == kWifiScanFailed) {
+    _scanInProgress = false;
+    return;
+  }
+
+  if (startResult >= 0) {
+    _cachedNetworks = collectScanResults(startResult);
+    _hasScanCache = true;
+    _lastScanAtMs = millis();
     WiFi.scanDelete();
+    _scanInProgress = false;
+    return;
+  }
+
+  _scanInProgress = true;
+  _scanStartedAtMs = millis();
+}
+
+bool WifiService::finalizeScanIfReady() {
+  if (!_scanInProgress) {
+    return false;
+  }
+
+  if ((millis() - _scanStartedAtMs) > kScanTimeoutMs) {
+    WiFi.scanDelete();
+    _scanInProgress = false;
+    return false;
+  }
+
+  const int status = WiFi.scanComplete();
+  if (status == kWifiScanRunning) {
+    return false;
+  }
+
+  _scanInProgress = false;
+  if (status == kWifiScanFailed || status < 0) {
+    WiFi.scanDelete();
+    return false;
+  }
+
+  _cachedNetworks = collectScanResults(status);
+  _hasScanCache = true;
+  _lastScanAtMs = millis();
+  WiFi.scanDelete();
+  return true;
+}
+
+std::vector<WifiNetworkInfo> WifiService::collectScanResults(int count) const {
+  std::vector<WifiNetworkInfo> networks;
+  if (count <= 0) {
     return networks;
   }
 
   networks.reserve(static_cast<size_t>(count));
   for (int i = 0; i < count; ++i) {
-    WifiNetworkInfo info;
-    info.ssid = WiFi.SSID(i);
-    info.rssi = WiFi.RSSI(i);
-    info.secured = WiFi.encryptionType(i) != WIFI_AUTH_OPEN;
-    networks.push_back(info);
+    String ssid = WiFi.SSID(i);
+    ssid.trim();
+    if (ssid.isEmpty()) {
+      continue;
+    }
+
+    WifiNetworkInfo candidate;
+    candidate.ssid = ssid;
+    candidate.rssi = WiFi.RSSI(i);
+    candidate.secured = WiFi.encryptionType(i) != WIFI_AUTH_OPEN;
+
+    bool merged = false;
+    for (size_t existingIndex = 0; existingIndex < networks.size(); ++existingIndex) {
+      if (networks[existingIndex].ssid == candidate.ssid) {
+        if (candidate.rssi > networks[existingIndex].rssi) {
+          networks[existingIndex] = candidate;
+        }
+        merged = true;
+        break;
+      }
+    }
+
+    if (!merged) {
+      networks.push_back(candidate);
+    }
   }
 
-  WiFi.scanDelete();
+  std::sort(networks.begin(), networks.end(), [](const WifiNetworkInfo& lhs, const WifiNetworkInfo& rhs) {
+    if (lhs.rssi == rhs.rssi) {
+      return lhs.ssid.compareTo(rhs.ssid) < 0;
+    }
+    return lhs.rssi > rhs.rssi;
+  });
+
   return networks;
 }
 
 bool WifiService::connectTo(const String& ssid, const String& password, uint32_t timeoutMs) {
   if (ssid.isEmpty()) {
-    _lastMessage = "SSID is required.";
+    _lastMessage = "SSID 不能为空。";
     return false;
   }
 
@@ -40,11 +149,11 @@ bool WifiService::connectTo(const String& ssid, const String& password, uint32_t
   }
 
   if (WiFi.status() == WL_CONNECTED) {
-    _lastMessage = "Connected to " + ssid + ".";
+    _lastMessage = "已连接到 " + ssid + "。";
     return true;
   }
 
-  _lastMessage = "WiFi connection failed or timed out.";
+  _lastMessage = "WiFi 连接失败或超时。";
   return false;
 }
 

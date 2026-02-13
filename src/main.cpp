@@ -3,7 +3,9 @@
 
 #include "AuthService.h"
 #include "ConfigStore.h"
-#include "DeviceStateService.h"
+#include "HostProbeService.h"
+#include "PowerOnService.h"
+#include "WakeOnLanService.h"
 #include "WebPortal.h"
 #include "WifiService.h"
 
@@ -14,8 +16,10 @@ constexpr const char* kSetupApPassword = "12345678";
 AuthService authService("admin", "admin123");
 WifiService wifiService;
 ConfigStore configStore;
-DeviceStateService deviceState(configStore);
-WebPortal webPortal(80, authService, wifiService, configStore, deviceState);
+WakeOnLanService wakeOnLanService;
+HostProbeService hostProbeService;
+PowerOnService powerOnService(wakeOnLanService, hostProbeService);
+WebPortal webPortal(80, authService, wifiService, configStore, powerOnService);
 
 void startSetupAccessPoint() {
   WiFi.mode(WIFI_AP_STA);
@@ -32,7 +36,7 @@ void setup() {
   Serial.begin(115200);
   delay(200);
 
-  deviceState.load();
+  authService.begin();
   startSetupAccessPoint();
   webPortal.begin();
 
@@ -40,5 +44,6 @@ void setup() {
 }
 
 void loop() {
-  delay(1000);
+  powerOnService.tick(wifiService.isConnected());
+  delay(100);
 }

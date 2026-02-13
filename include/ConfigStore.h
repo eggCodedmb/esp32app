@@ -5,6 +5,7 @@
 struct ComputerConfig {
   String name;
   String ip;
+  String mac;
   uint16_t port;
   String owner;
 };
@@ -15,9 +16,6 @@ class ConfigStore {
 
   ComputerConfig loadComputerConfig() const;
   bool saveComputerConfig(const ComputerConfig& config) const;
-
-  bool loadPowerState() const;
-  bool savePowerState(bool poweredOn) const;
 
  private:
   static constexpr const char* kNamespace = "esp32app";
