@@ -826,9 +826,15 @@ String WebPortal::dashboardPage() const {
     .ddns-record { border: 1px dashed var(--line); border-radius: 10px; background: #f8fafc; padding: 10px; }
     .ddns-record-header { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
     .ddns-record-title { font-size: 14px; font-weight: 600; }
+    .power-config-grid { display: grid; grid-template-columns: minmax(0, 2fr) minmax(220px, 1fr); gap: 12px; }
+    .power-config-card { border: 1px solid var(--line); border-radius: 10px; background: #f8fafc; padding: 12px; }
+    .power-config-card h3 { margin: 0 0 10px; font-size: 15px; }
+    .power-config-actions { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; }
+    .power-config-actions button { margin-top: 0; }
     @media (max-width: 720px) {
       .row { grid-template-columns: 1fr; }
       .metrics { grid-template-columns: 1fr 1fr; }
+      .power-config-grid { grid-template-columns: 1fr; }
     }
     @media (max-width: 460px) {
       .metrics { grid-template-columns: 1fr; }
@@ -843,10 +849,38 @@ String WebPortal::dashboardPage() const {
     </header>
 
     <section>
-      <h2>远程开机（Wake-on-LAN）</h2>
-      <p class="muted">开机状态：<strong id="powerState">待机</strong></p>
-      <button id="powerButton" type="button">执行开机</button>
-      <p id="powerStatus" class="status"></p>
+      <h2>远程开机与计算机配置</h2>
+      <div class="power-config-grid">
+        <div class="power-config-card">
+          <h3>目标主机参数</h3>
+          <form id="configForm">
+            <div class="row">
+              <div>
+                <label for="computerIp">计算机 IP</label>
+                <input id="computerIp" name="computerIp" autocomplete="off">
+              </div>
+              <div>
+                <label for="computerMac">计算机 MAC 地址</label>
+                <input id="computerMac" name="computerMac" placeholder="AA:BB:CC:DD:EE:FF" autocomplete="off">
+              </div>
+              <div>
+                <label for="computerPort">探测端口</label>
+                <input id="computerPort" name="computerPort" type="number" min="1" max="65535">
+              </div>
+            </div>
+            <button type="submit">保存计算机配置</button>
+          </form>
+          <p id="configStatus" class="status"></p>
+        </div>
+        <div class="power-config-card">
+          <h3>远程开机控制</h3>
+          <div class="power-config-actions">
+            <p class="muted">开机状态：<strong id="powerState">待机</strong></p>
+            <button id="powerButton" type="button">执行开机</button>
+          </div>
+          <p id="powerStatus" class="status"></p>
+        </div>
+      </div>
     </section>
 
     <section>
@@ -921,28 +955,6 @@ String WebPortal::dashboardPage() const {
         <div class="metric"><span class="metric-title">Flash 剩余</span><span id="espFlashFree" class="metric-value">-</span></div>
       </div>
       <p id="espInfoStatus" class="status"></p>
-    </section>
-
-    <section>
-      <h2>计算机配置</h2>
-      <form id="configForm">
-        <div class="row">
-          <div>
-            <label for="computerIp">计算机 IP</label>
-            <input id="computerIp" name="computerIp" autocomplete="off">
-          </div>
-          <div>
-            <label for="computerMac">计算机 MAC 地址</label>
-            <input id="computerMac" name="computerMac" placeholder="AA:BB:CC:DD:EE:FF" autocomplete="off">
-          </div>
-          <div>
-            <label for="computerPort">探测端口</label>
-            <input id="computerPort" name="computerPort" type="number" min="1" max="65535">
-          </div>
-        </div>
-        <button type="submit">保存配置</button>
-      </form>
-      <p id="configStatus" class="status"></p>
     </section>
 
     <section>
