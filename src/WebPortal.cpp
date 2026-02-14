@@ -1323,7 +1323,9 @@ String WebPortal::dashboardPage() const {
       if (code === "already_booting") return "开机流程进行中，请稍候。";
       if (code === "already_on") return "主机已经在线。";
       if (code === "ota_busy") return "OTA 任务执行中，请稍后再试。";
-      if (code === "ota_too_frequent") return "手动升级触发过于频繁，请稍后重试。";
+      if (code === "ota_too_frequent") return "手动 OTA 操作触发过于频繁，请稍后重试。";
+      if (code === "ota_check_too_frequent") return "手动检测触发过于频繁，请稍后重试。";
+      if (code === "ota_upgrade_too_frequent") return "手动升级触发过于频繁，请稍后重试。";
       if (code === "ota_config_incomplete") return "OTA 配置不完整，请先填写巴法云 UID 和 Topic。";
       if (code === "ota_no_update") return "未发布可用新固件。";
       if (code === "ota_lookup_http_failed") return "查询 OTA 失败，请检查网络。";
@@ -1428,15 +1430,19 @@ String WebPortal::dashboardPage() const {
       if (message === "Failed to parse Bemfa OTA response code.") return "解析巴法云 OTA 响应失败。";
       if (message === "Failed to open Bemfa OTA endpoint.") return "无法连接巴法云 OTA 接口。";
       if (message === "Bemfa OTA response does not contain firmware URL.") return "巴法云 OTA 响应缺少固件下载地址。";
-      if (message.indexOf("New firmware available. Local=") === 0) {
+      if (message.indexOf("New firmware available. Local=") === 0 ||
+          message.indexOf("Firmware package available. Local=") === 0) {
         return "检测到新固件：" +
             message.replace("New firmware available. ", "")
+                   .replace("Firmware package available. ", "")
                    .replace("Local=", "本地=")
                    .replace("remote=", "远端=");
       }
-      if (message.indexOf("No newer firmware version. Local=") === 0) {
+      if (message.indexOf("No newer firmware version. Local=") === 0 ||
+          message.indexOf("No firmware version change. Local=") === 0) {
         return "当前已是最新版本：" +
             message.replace("No newer firmware version. ", "")
+                   .replace("No firmware version change. ", "")
                    .replace("Local=", "本地=")
                    .replace("remote=", "远端=");
       }

@@ -115,6 +115,40 @@ void test_request_manual_check_accepts_valid_manual_trigger() {
   TEST_ASSERT_EQUAL_STRING("Manual OTA check request queued.", status.message.c_str());
 }
 
+void test_manual_check_and_upgrade_use_independent_rate_limit() {
+  FirmwareUpgradeService service;
+  service.begin();
+  service.updateConfig(BemfaConfig{});
+
+  service._lastManualCheckRequestAtMs = millis();
+
+  String errorCode;
+  TEST_ASSERT_TRUE(service.requestManualUpgrade(true, &errorCode));
+  TEST_ASSERT_EQUAL_STRING("", errorCode.c_str());
+}
+
+void test_manual_check_rate_limit_uses_check_error_code() {
+  FirmwareUpgradeService service;
+  service.begin();
+  service.updateConfig(BemfaConfig{});
+  service._lastManualCheckRequestAtMs = millis();
+
+  String errorCode;
+  TEST_ASSERT_FALSE(service.requestManualCheck(true, &errorCode));
+  TEST_ASSERT_EQUAL_STRING("ota_check_too_frequent", errorCode.c_str());
+}
+
+void test_manual_upgrade_rate_limit_uses_upgrade_error_code() {
+  FirmwareUpgradeService service;
+  service.begin();
+  service.updateConfig(BemfaConfig{});
+  service._lastManualUpgradeRequestAtMs = millis();
+
+  String errorCode;
+  TEST_ASSERT_FALSE(service.requestManualUpgrade(true, &errorCode));
+  TEST_ASSERT_EQUAL_STRING("ota_upgrade_too_frequent", errorCode.c_str());
+}
+
 void test_parse_lookup_response_reads_version_code_from_v_field() {
   FirmwareUpgradeService service;
   FirmwareUpgradeService::FirmwarePackageInfo packageInfo;
@@ -169,38 +203,44 @@ void test_update_auto_check_config_forces_disabled_and_normalizes_invalid_interv
   TEST_ASSERT_EQUAL_UINT16(60, status.autoCheckIntervalMinutes);
 }
 
-void test_is_newer_than_installed_version_handles_first_install() {
+void test_version_difference_detection_handles_first_install() {
   FirmwareUpgradeService service;
   service.begin();
   service._installedVersionCode = -1;
 
   FirmwareUpgradeService::FirmwarePackageInfo packageInfo;
   packageInfo.versionCode = 6;
-  TEST_ASSERT_TRUE(service.isNewerThanInstalledVersion(packageInfo));
+  TEST_ASSERT_TRUE(service.isVersionDifferentFromInstalled(packageInfo));
 }
 
-void test_is_newer_than_installed_version_rejects_equal_or_older() {
+void test_version_difference_detection_rejects_equal_version() {
   FirmwareUpgradeService service;
   service.begin();
   service._installedVersionCode = 6;
 
   FirmwareUpgradeService::FirmwarePackageInfo equalVersionPackage;
   equalVersionPackage.versionCode = 6;
-  TEST_ASSERT_FALSE(service.isNewerThanInstalledVersion(equalVersionPackage));
+  TEST_ASSERT_FALSE(service.isVersionDifferentFromInstalled(equalVersionPackage));
+}
+
+void test_version_difference_detection_allows_older_version_for_downgrade() {
+  FirmwareUpgradeService service;
+  service.begin();
+  service._installedVersionCode = 6;
 
   FirmwareUpgradeService::FirmwarePackageInfo olderVersionPackage;
   olderVersionPackage.versionCode = 5;
-  TEST_ASSERT_FALSE(service.isNewerThanInstalledVersion(olderVersionPackage));
+  TEST_ASSERT_TRUE(service.isVersionDifferentFromInstalled(olderVersionPackage));
 }
 
-void test_is_newer_than_installed_version_allows_missing_remote_version_code() {
+void test_version_difference_detection_allows_missing_remote_version_code() {
   FirmwareUpgradeService service;
   service.begin();
   service._installedVersionCode = 6;
 
   FirmwareUpgradeService::FirmwarePackageInfo packageInfo;
   packageInfo.versionCode = -1;
-  TEST_ASSERT_TRUE(service.isNewerThanInstalledVersion(packageInfo));
+  TEST_ASSERT_TRUE(service.isVersionDifferentFromInstalled(packageInfo));
 }
 
 void setup() {
@@ -215,13 +255,17 @@ void setup() {
   RUN_TEST(test_request_manual_upgrade_rejects_when_wifi_disconnected);
   RUN_TEST(test_request_manual_upgrade_accepts_valid_manual_trigger);
   RUN_TEST(test_request_manual_check_accepts_valid_manual_trigger);
+  RUN_TEST(test_manual_check_and_upgrade_use_independent_rate_limit);
+  RUN_TEST(test_manual_check_rate_limit_uses_check_error_code);
+  RUN_TEST(test_manual_upgrade_rate_limit_uses_upgrade_error_code);
   RUN_TEST(test_parse_lookup_response_reads_version_code_from_v_field);
   RUN_TEST(test_parse_lookup_response_fails_when_v_field_missing);
   RUN_TEST(test_update_auto_check_config_forces_disabled);
   RUN_TEST(test_update_auto_check_config_forces_disabled_and_normalizes_invalid_interval);
-  RUN_TEST(test_is_newer_than_installed_version_handles_first_install);
-  RUN_TEST(test_is_newer_than_installed_version_rejects_equal_or_older);
-  RUN_TEST(test_is_newer_than_installed_version_allows_missing_remote_version_code);
+  RUN_TEST(test_version_difference_detection_handles_first_install);
+  RUN_TEST(test_version_difference_detection_rejects_equal_version);
+  RUN_TEST(test_version_difference_detection_allows_older_version_for_downgrade);
+  RUN_TEST(test_version_difference_detection_allows_missing_remote_version_code);
   UNITY_END();
 }
 

@@ -135,7 +135,7 @@ void FirmwareUpgradeService::tick(bool wifiConnected) {
   String detailMessage;
 
   if (action == RequestAction::Upgrade && _hasCachedPackage && _updateAvailable &&
-      isNewerThanInstalledVersion(_cachedPackageInfo)) {
+      isVersionDifferentFromInstalled(_cachedPackageInfo)) {
     packageInfo = _cachedPackageInfo;
     packageReady = true;
   } else {
@@ -163,7 +163,7 @@ void FirmwareUpgradeService::tick(bool wifiConnected) {
   _targetVersionCode = packageInfo.versionCode;
   _targetTag = packageInfo.tag;
 
-  if (!isNewerThanInstalledVersion(packageInfo)) {
+  if (!isVersionDifferentFromInstalled(packageInfo)) {
     _busy = false;
     _lastFinishAtMs = millis();
     _lastError = "ota_no_update";
@@ -171,7 +171,7 @@ void FirmwareUpgradeService::tick(bool wifiConnected) {
     _updateAvailable = false;
     _hasCachedPackage = false;
     setState("NO_UPDATE",
-             "No newer firmware version. Local=" + String(_installedVersionCode) +
+             "No firmware version change. Local=" + String(_installedVersionCode) +
                  ", remote=" + String(packageInfo.versionCode) + ".");
     return;
   }
@@ -186,7 +186,7 @@ void FirmwareUpgradeService::tick(bool wifiConnected) {
     _lastError = "";
     _activeTrigger = TriggerSource::None;
     setState("UPDATE_AVAILABLE",
-             "New firmware available. Local=" + String(_installedVersionCode) +
+             "Firmware package available. Local=" + String(_installedVersionCode) +
                  ", remote=" + String(packageInfo.versionCode) + ".");
     return;
   }
@@ -229,21 +229,11 @@ void FirmwareUpgradeService::tick(bool wifiConnected) {
 }
 
 bool FirmwareUpgradeService::requestManualCheck(bool wifiConnected, String* errorCode) {
-  const bool accepted =
-      queueRequest(RequestAction::CheckOnly, TriggerSource::Manual, wifiConnected, errorCode);
-  if (accepted) {
-    _lastManualRequestAtMs = millis();
-  }
-  return accepted;
+  return queueRequest(RequestAction::CheckOnly, TriggerSource::Manual, wifiConnected, errorCode);
 }
 
 bool FirmwareUpgradeService::requestManualUpgrade(bool wifiConnected, String* errorCode) {
-  const bool accepted =
-      queueRequest(RequestAction::Upgrade, TriggerSource::Manual, wifiConnected, errorCode);
-  if (accepted) {
-    _lastManualRequestAtMs = millis();
-  }
-  return accepted;
+  return queueRequest(RequestAction::Upgrade, TriggerSource::Manual, wifiConnected, errorCode);
 }
 
 FirmwareUpgradeStatus FirmwareUpgradeService::getStatus() const {
@@ -331,15 +321,32 @@ bool FirmwareUpgradeService::queueRequest(RequestAction action,
 
   if (source == TriggerSource::Manual) {
     const uint32_t now = millis();
-    if (_lastManualRequestAtMs != 0 &&
-        (now - _lastManualRequestAtMs) < kMinManualTriggerIntervalMs) {
+    uint32_t* lastRequestAtMs = nullptr;
+    const char* tooFrequentErrorCode = "ota_too_frequent";
+    String tooFrequentMessage = "Manual OTA request is too frequent.";
+
+    if (action == RequestAction::CheckOnly) {
+      lastRequestAtMs = &_lastManualCheckRequestAtMs;
+      tooFrequentErrorCode = "ota_check_too_frequent";
+      tooFrequentMessage = "Manual OTA check request is too frequent.";
+    } else if (action == RequestAction::Upgrade) {
+      lastRequestAtMs = &_lastManualUpgradeRequestAtMs;
+      tooFrequentErrorCode = "ota_upgrade_too_frequent";
+      tooFrequentMessage = "Manual OTA upgrade request is too frequent.";
+    } else {
+      lastRequestAtMs = &_lastManualUpgradeRequestAtMs;
+    }
+
+    if (*lastRequestAtMs != 0 && (now - *lastRequestAtMs) < kMinManualTriggerIntervalMs) {
       if (errorCode != nullptr) {
-        *errorCode = "ota_too_frequent";
+        *errorCode = tooFrequentErrorCode;
       }
-      setState("FAILED", "Manual OTA request is too frequent.");
-      _lastError = "ota_too_frequent";
+      setState("FAILED", tooFrequentMessage);
+      _lastError = tooFrequentErrorCode;
       return false;
     }
+
+    *lastRequestAtMs = now;
   }
 
   _pendingRequest = true;
@@ -364,7 +371,7 @@ bool FirmwareUpgradeService::queueRequest(RequestAction action,
   return true;
 }
 
-bool FirmwareUpgradeService::isNewerThanInstalledVersion(
+bool FirmwareUpgradeService::isVersionDifferentFromInstalled(
     const FirmwarePackageInfo& packageInfo) const {
   if (packageInfo.versionCode < 0) {
     return true;
@@ -372,7 +379,7 @@ bool FirmwareUpgradeService::isNewerThanInstalledVersion(
   if (_installedVersionCode < 0) {
     return true;
   }
-  return packageInfo.versionCode > _installedVersionCode;
+  return packageInfo.versionCode != _installedVersionCode;
 }
 
 int32_t FirmwareUpgradeService::loadInstalledVersionCode() const {

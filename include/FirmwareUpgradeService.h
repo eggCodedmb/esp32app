@@ -74,7 +74,7 @@ class FirmwareUpgradeService {
                     TriggerSource source,
                     bool wifiConnected,
                     String* errorCode = nullptr);
-  bool isNewerThanInstalledVersion(const FirmwarePackageInfo& packageInfo) const;
+  bool isVersionDifferentFromInstalled(const FirmwarePackageInfo& packageInfo) const;
   int32_t loadInstalledVersionCode() const;
   bool saveInstalledVersionCode(int32_t versionCode) const;
   uint32_t autoCheckIntervalMs() const;
@@ -137,5 +137,6 @@ class FirmwareUpgradeService {
   uint32_t _lastCheckAtMs = 0;
   uint32_t _lastStartAtMs = 0;
   uint32_t _lastFinishAtMs = 0;
-  uint32_t _lastManualRequestAtMs = 0;
+  uint32_t _lastManualCheckRequestAtMs = 0;
+  uint32_t _lastManualUpgradeRequestAtMs = 0;
 };
