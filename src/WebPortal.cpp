@@ -4,8 +4,13 @@
 #include <cstdio>
 #include <ESP.h>
 
+#include "DdnsProviderRegistry.h"
+
 namespace {
 constexpr uint16_t kDefaultStatusPollIntervalMinutes = 3;
+constexpr uint32_t kDefaultDdnsIntervalSeconds = 300;
+constexpr uint32_t kMinDdnsIntervalSeconds = 30;
+constexpr uint32_t kMaxDdnsIntervalSeconds = 86400;
 
 bool normalizeMacAddress(const String& source, String* normalized) {
   if (normalized == nullptr) {
@@ -72,6 +77,17 @@ uint16_t parseStatusPollIntervalMinutes(const String& value, uint16_t defaultVal
 
   return normalizeStatusPollIntervalMinutes(defaultValue);
 }
+
+String normalizeDdnsProvider(const String& provider) {
+  return DdnsProviderRegistry::normalizeProvider(provider);
+}
+
+uint32_t normalizeDdnsIntervalSeconds(uint32_t value) {
+  if (value < kMinDdnsIntervalSeconds || value > kMaxDdnsIntervalSeconds) {
+    return kDefaultDdnsIntervalSeconds;
+  }
+  return value;
+}
 }  // namespace
 
 WebPortal::WebPortal(uint16_t port,
@@ -80,6 +96,7 @@ WebPortal::WebPortal(uint16_t port,
                      ConfigStore& configStore,
                      PowerOnService& powerOnService,
                      BemfaService& bemfaService,
+                     DdnsService& ddnsService,
                      FirmwareUpgradeService& firmwareUpgradeService)
     : _server(port),
       _authService(authService),
@@ -87,6 +104,7 @@ WebPortal::WebPortal(uint16_t port,
       _configStore(configStore),
       _powerOnService(powerOnService),
       _bemfaService(bemfaService),
+      _ddnsService(ddnsService),
       _firmwareUpgradeService(firmwareUpgradeService) {}
 
 void WebPortal::begin() {
@@ -148,8 +166,10 @@ void WebPortal::registerRoutes() {
 
     const ComputerConfig config = _configStore.loadComputerConfig();
     const BemfaConfig bemfaConfig = _configStore.loadBemfaConfig();
+    const DdnsConfig ddnsConfig = _configStore.loadDdnsConfig();
     const SystemConfig systemConfig = _configStore.loadSystemConfig();
     const BemfaRuntimeStatus bemfaStatus = _bemfaService.getStatus();
+    const DdnsRuntimeStatus ddnsStatus = _ddnsService.getStatus();
     const PowerOnStatus power = _powerOnService.getStatus();
     const String otaCurrentVersion =
         systemConfig.otaInstalledVersionCode >= 0 ? String(systemConfig.otaInstalledVersionCode) : "-";
@@ -177,7 +197,29 @@ void WebPortal::registerRoutes() {
     body += "\"otaCurrentVersion\":\"" + jsonEscape(otaCurrentVersion) + "\",";
     body += "\"otaAutoCheckEnabled\":false,";
     body += "\"otaAutoCheckIntervalMinutes\":" +
-            String(systemConfig.otaAutoCheckIntervalMinutes);
+            String(systemConfig.otaAutoCheckIntervalMinutes) + ",";
+    body += "\"ddnsEnabled\":" + String(ddnsConfig.enabled ? "true" : "false") + ",";
+    body += "\"ddnsState\":\"" + jsonEscape(ddnsStatus.state) + "\",";
+    body += "\"ddnsMessage\":\"" + jsonEscape(ddnsStatus.message) + "\",";
+    body += "\"ddnsActiveRecordCount\":" + String(ddnsStatus.activeRecordCount) + ",";
+    body += "\"ddnsTotalUpdateCount\":" + String(ddnsStatus.totalUpdateCount) + ",";
+    body += "\"ddnsRecords\":[";
+    for (size_t index = 0; index < ddnsConfig.records.size(); ++index) {
+      const DdnsRecordConfig& record = ddnsConfig.records[index];
+      body += "{";
+      body += "\"enabled\":" + String(record.enabled ? "true" : "false") + ",";
+      body += "\"provider\":\"" + jsonEscape(record.provider) + "\",";
+      body += "\"domain\":\"" + jsonEscape(record.domain) + "\",";
+      body += "\"username\":\"" + jsonEscape(record.username) + "\",";
+      body += "\"password\":\"" + jsonEscape(record.password) + "\",";
+      body += "\"updateIntervalSeconds\":" + String(record.updateIntervalSeconds) + ",";
+      body += "\"useLocalIp\":" + String(record.useLocalIp ? "true" : "false");
+      body += "}";
+      if (index + 1 < ddnsConfig.records.size()) {
+        body += ",";
+      }
+    }
+    body += "]";
     body += "}";
 
     request->send(200, "application/json", body);
@@ -248,15 +290,84 @@ void WebPortal::registerRoutes() {
     }
     systemConfig.otaAutoCheckEnabled = false;
 
+    DdnsConfig ddnsConfig = _configStore.loadDdnsConfig();
+    if (request->hasParam("ddnsEnabled", true)) {
+      ddnsConfig.enabled = parseBoolValue(request->getParam("ddnsEnabled", true)->value(), false);
+    }
+    if (request->hasParam("ddnsRecordCount", true)) {
+      const int parsedRecordCount = request->getParam("ddnsRecordCount", true)->value().toInt();
+      size_t recordCount = 0;
+      if (parsedRecordCount > 0) {
+        recordCount = static_cast<size_t>(parsedRecordCount);
+      }
+      if (recordCount > ConfigStore::kMaxDdnsRecords) {
+        recordCount = ConfigStore::kMaxDdnsRecords;
+      }
+
+      ddnsConfig.records.clear();
+      ddnsConfig.records.reserve(recordCount);
+      for (size_t index = 0; index < recordCount; ++index) {
+        DdnsRecordConfig record;
+        String key = "ddns" + String(index) + "Enabled";
+        if (request->hasParam(key, true)) {
+          record.enabled = parseBoolValue(request->getParam(key, true)->value(), false);
+        } else {
+          record.enabled = true;
+        }
+
+        key = "ddns" + String(index) + "Provider";
+        if (request->hasParam(key, true)) {
+          record.provider = normalizeDdnsProvider(request->getParam(key, true)->value());
+        }
+
+        key = "ddns" + String(index) + "Domain";
+        if (request->hasParam(key, true)) {
+          record.domain = request->getParam(key, true)->value();
+          record.domain.trim();
+        }
+
+        key = "ddns" + String(index) + "Username";
+        if (request->hasParam(key, true)) {
+          record.username = request->getParam(key, true)->value();
+          record.username.trim();
+        }
+
+        key = "ddns" + String(index) + "Password";
+        if (request->hasParam(key, true)) {
+          record.password = request->getParam(key, true)->value();
+          record.password.trim();
+        }
+
+        key = "ddns" + String(index) + "IntervalSeconds";
+        if (request->hasParam(key, true)) {
+          const int parsedInterval = request->getParam(key, true)->value().toInt();
+          if (parsedInterval > 0) {
+            record.updateIntervalSeconds = static_cast<uint32_t>(parsedInterval);
+          }
+        }
+        record.updateIntervalSeconds =
+            normalizeDdnsIntervalSeconds(record.updateIntervalSeconds);
+
+        key = "ddns" + String(index) + "UseLocalIp";
+        if (request->hasParam(key, true)) {
+          record.useLocalIp = parseBoolValue(request->getParam(key, true)->value(), false);
+        }
+
+        ddnsConfig.records.push_back(record);
+      }
+    }
+
     const bool computerSaved = _configStore.saveComputerConfig(config);
     const bool bemfaSaved = _configStore.saveBemfaConfig(bemfaConfig);
     const bool systemSaved = _configStore.saveSystemConfig(systemConfig);
-    if (!computerSaved || !bemfaSaved || !systemSaved) {
+    const bool ddnsSaved = _configStore.saveDdnsConfig(ddnsConfig);
+    if (!computerSaved || !bemfaSaved || !systemSaved || !ddnsSaved) {
       request->send(500, "application/json", "{\"success\":false,\"error\":\"save_failed\"}");
       return;
     }
 
     _bemfaService.updateConfig(bemfaConfig);
+    _ddnsService.updateConfig(ddnsConfig);
     _firmwareUpgradeService.updateConfig(bemfaConfig);
     _firmwareUpgradeService.updateAutoCheckConfig(false,
                                                   systemConfig.otaAutoCheckIntervalMinutes);
@@ -354,6 +465,49 @@ void WebPortal::registerRoutes() {
     body += "\"lastConnectAtMs\":" + String(status.lastConnectAtMs) + ",";
     body += "\"lastCommandAtMs\":" + String(status.lastCommandAtMs) + ",";
     body += "\"lastPublishAtMs\":" + String(status.lastPublishAtMs);
+    body += "}";
+
+    request->send(200, "application/json", body);
+  });
+
+  _server.on("/api/ddns/status", HTTP_GET, [this](AsyncWebServerRequest* request) {
+    if (!ensureAuthorized(request, true)) {
+      return;
+    }
+
+    const DdnsRuntimeStatus status = _ddnsService.getStatus();
+    const std::vector<DdnsRecordRuntimeStatus> records = _ddnsService.getRecordStatuses();
+    String body = "{";
+    body += "\"enabled\":" + String(status.enabled ? "true" : "false") + ",";
+    body += "\"configured\":" + String(status.configured ? "true" : "false") + ",";
+    body += "\"wifiConnected\":" + String(status.wifiConnected ? "true" : "false") + ",";
+    body += "\"state\":\"" + jsonEscape(status.state) + "\",";
+    body += "\"message\":\"" + jsonEscape(status.message) + "\",";
+    body += "\"activeRecordCount\":" + String(status.activeRecordCount) + ",";
+    body += "\"totalUpdateCount\":" + String(status.totalUpdateCount) + ",";
+    body += "\"records\":[";
+    for (size_t index = 0; index < records.size(); ++index) {
+      const DdnsRecordRuntimeStatus& record = records[index];
+      body += "{";
+      body += "\"enabled\":" + String(record.enabled ? "true" : "false") + ",";
+      body += "\"configured\":" + String(record.configured ? "true" : "false") + ",";
+      body += "\"provider\":\"" + jsonEscape(record.provider) + "\",";
+      body += "\"domain\":\"" + jsonEscape(record.domain) + "\",";
+      body += "\"username\":\"" + jsonEscape(record.username) + "\",";
+      body += "\"updateIntervalSeconds\":" + String(record.updateIntervalSeconds) + ",";
+      body += "\"useLocalIp\":" + String(record.useLocalIp ? "true" : "false") + ",";
+      body += "\"state\":\"" + jsonEscape(record.state) + "\",";
+      body += "\"message\":\"" + jsonEscape(record.message) + "\",";
+      body += "\"lastOldIp\":\"" + jsonEscape(record.lastOldIp) + "\",";
+      body += "\"lastNewIp\":\"" + jsonEscape(record.lastNewIp) + "\",";
+      body += "\"updateCount\":" + String(record.updateCount) + ",";
+      body += "\"lastUpdateAtMs\":" + String(record.lastUpdateAtMs);
+      body += "}";
+      if (index + 1 < records.size()) {
+        body += ",";
+      }
+    }
+    body += "]";
     body += "}";
 
     request->send(200, "application/json", body);
@@ -668,6 +822,10 @@ String WebPortal::dashboardPage() const {
     .inline-check { display: flex; align-items: center; gap: 10px; margin-top: 8px; }
     .inline-check input[type="checkbox"] { width: auto; margin: 0; }
     .code { font-family: Consolas, Monaco, monospace; font-size: 12px; color: #374151; }
+    .ddns-records { margin-top: 10px; display: flex; flex-direction: column; gap: 10px; }
+    .ddns-record { border: 1px dashed var(--line); border-radius: 10px; background: #f8fafc; padding: 10px; }
+    .ddns-record-header { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+    .ddns-record-title { font-size: 14px; font-weight: 600; }
     @media (max-width: 720px) {
       .row { grid-template-columns: 1fr; }
       .metrics { grid-template-columns: 1fr 1fr; }
@@ -714,6 +872,23 @@ String WebPortal::dashboardPage() const {
       </form>
       <p id="systemPollStatus" class="muted"></p>
       <p id="systemConfigStatus" class="status"></p>
+    </section>
+
+    <section>
+      <h2>动态域名解析（DDNS）</h2>
+      <form id="ddnsForm">
+        <div class="inline-check">
+          <input id="ddnsEnabled" name="ddnsEnabled" type="checkbox">
+          <label for="ddnsEnabled" style="margin: 0;">启用 DDNS</label>
+        </div>
+        <div class="inline-actions">
+          <button id="ddnsAddRecordButton" class="secondary" type="button">新增记录</button>
+          <button type="submit">保存 DDNS 配置</button>
+        </div>
+        <div id="ddnsRecords" class="ddns-records"></div>
+      </form>
+      <p class="muted">状态：<strong id="ddnsState">-</strong>，活跃记录：<strong id="ddnsActiveCount">0</strong>，更新次数：<strong id="ddnsUpdateCount">0</strong></p>
+      <p id="ddnsStatus" class="status"></p>
     </section>
 
     <section>
@@ -799,7 +974,7 @@ String WebPortal::dashboardPage() const {
             <input id="bemfaPort" name="bemfaPort" type="number" min="1" max="65535">
           </div>
         </div>
-        <button type="submit">保存巴法云配置</button>
+        <button type="submit">保存配置</button>
       </form>
       <p class="muted">状态：<strong id="bemfaState">-</strong>，连接：<strong id="bemfaConnected">-</strong></p>
       <p id="bemfaTopics" class="code">-</p>
@@ -809,11 +984,10 @@ String WebPortal::dashboardPage() const {
     <section>
       <h2>固件 OTA 升级</h2>
       <p class="muted">状态：<strong id="otaState">-</strong></p>
-      <p class="muted">下载进度：<strong id="otaProgress">0%</strong></p>
       <p class="muted">当前版本：<span id="otaCurrentVersion" class="code">-</span></p>
       <p class="muted">目标版本：<span id="otaTargetVersion" class="code">-</span></p>
       <div class="inline-actions">
-        <button id="otaCheckButton" class="secondary" type="button">手动检测新版本</button>
+        <button id="otaCheckButton" class="secondary" type="button">检测新版本</button>
         <button id="otaUpgradeButton" type="button" hidden>升级固件</button>
       </div>
       <p id="otaStatus" class="status"></p>
@@ -855,6 +1029,9 @@ String WebPortal::dashboardPage() const {
     const allowedStatusPollIntervals = [1, 3, 10, 30, 60];
     let statusPollTimer = 0;
     let otaActionPollTimer = 0;
+    const ddnsProviders = ["duckdns"];
+    const maxDdnsRecords = 5;
+    let ddnsRecordsCache = [];
 
     function normalizeStatusPollIntervalMinutes(value) {
       const minutes = Number(value);
@@ -919,6 +1096,201 @@ String WebPortal::dashboardPage() const {
       setText("systemPollStatus", "状态轮询：" + statusPollIntervalLabel(normalizedMinutes));
     }
 
+    function escapeHtml(value) {
+      return String(value || "")
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;")
+          .replace(/"/g, "&quot;")
+          .replace(/'/g, "&#39;");
+    }
+
+    function normalizeDdnsProvider(value) {
+      const normalized = String(value || "").trim().toLowerCase();
+      if (ddnsProviders.indexOf(normalized) >= 0) {
+        return normalized;
+      }
+      return "duckdns";
+    }
+
+    function normalizeDdnsIntervalSeconds(value) {
+      const interval = Number(value);
+      if (!Number.isFinite(interval)) {
+        return 300;
+      }
+      const normalized = Math.floor(interval);
+      if (normalized < 30 || normalized > 86400) {
+        return 300;
+      }
+      return normalized;
+    }
+
+    function normalizeDdnsRecord(record) {
+      return {
+        enabled: !!record.enabled,
+        provider: normalizeDdnsProvider(record.provider),
+        domain: String(record.domain || "").trim(),
+        username: String(record.username || "").trim(),
+        password: String(record.password || "").trim(),
+        updateIntervalSeconds: normalizeDdnsIntervalSeconds(record.updateIntervalSeconds),
+        useLocalIp: !!record.useLocalIp
+      };
+    }
+
+    function createDefaultDdnsRecord() {
+      return {
+        enabled: true,
+        provider: "duckdns",
+        domain: "",
+        username: "",
+        password: "",
+        updateIntervalSeconds: 300,
+        useLocalIp: false
+      };
+    }
+
+    function ddnsProviderOptions(selectedProvider) {
+      return ddnsProviders
+          .map(function (provider) {
+            const selected = provider === selectedProvider ? " selected" : "";
+            return "<option value=\"" + provider + "\"" + selected + ">" + provider + "</option>";
+          })
+          .join("");
+    }
+
+    function collectDdnsRecordsFromForm() {
+      const cards = Array.from(document.querySelectorAll("#ddnsRecords .ddns-record"));
+      return cards.map(function (card) {
+        const enabledElement = card.querySelector(".ddns-enabled");
+        const providerElement = card.querySelector(".ddns-provider");
+        const domainElement = card.querySelector(".ddns-domain");
+        const usernameElement = card.querySelector(".ddns-username");
+        const passwordElement = card.querySelector(".ddns-password");
+        const intervalElement = card.querySelector(".ddns-interval");
+        const localIpElement = card.querySelector(".ddns-local-ip");
+        return normalizeDdnsRecord({
+          enabled: enabledElement ? !!enabledElement.checked : false,
+          provider: providerElement ? providerElement.value : "duckdns",
+          domain: domainElement ? domainElement.value : "",
+          username: usernameElement ? usernameElement.value : "",
+          password: passwordElement ? passwordElement.value : "",
+          updateIntervalSeconds: intervalElement ? intervalElement.value : 300,
+          useLocalIp: localIpElement ? !!localIpElement.checked : false
+        });
+      });
+    }
+
+    function renderDdnsRecords(records) {
+      ddnsRecordsCache =
+          (Array.isArray(records) ? records : []).slice(0, maxDdnsRecords).map(normalizeDdnsRecord);
+
+      const container = document.getElementById("ddnsRecords");
+      if (!container) {
+        return;
+      }
+
+      if (ddnsRecordsCache.length === 0) {
+        container.innerHTML = "<p class=\"muted\">暂无 DDNS 记录，点击“新增记录”开始配置。</p>";
+        return;
+      }
+
+      container.innerHTML = ddnsRecordsCache
+                                .map(function (record, index) {
+                                  return (
+                                      "<div class=\"ddns-record\" data-index=\"" + index + "\">" +
+                                      "<div class=\"ddns-record-header\">" +
+                                      "<span class=\"ddns-record-title\">记录 #" + (index + 1) + "</span>" +
+                                      "<button class=\"secondary ddns-remove-button\" type=\"button\" data-index=\"" + index + "\">删除</button>" +
+                                      "</div>" +
+                                      "<div class=\"inline-check\">" +
+                                      "<input class=\"ddns-enabled\" type=\"checkbox\"" + (record.enabled ? " checked" : "") + ">" +
+                                      "<label style=\"margin:0;\">启用此记录</label>" +
+                                      "</div>" +
+                                      "<div class=\"row\">" +
+                                      "<div><label>服务商</label><select class=\"ddns-provider\">" + ddnsProviderOptions(record.provider) + "</select></div>" +
+                                      "<div><label>域名/主机</label><input class=\"ddns-domain\" autocomplete=\"off\" value=\"" + escapeHtml(record.domain) + "\" placeholder=\"example.ddns.net\"></div>" +
+                                      "<div><label>用户名/Token</label><input class=\"ddns-username\" autocomplete=\"off\" value=\"" + escapeHtml(record.username) + "\"></div>" +
+                                      "<div><label>密码/Key</label><input class=\"ddns-password\" type=\"password\" autocomplete=\"off\" value=\"" + escapeHtml(record.password) + "\"></div>" +
+                                      "<div><label>更新间隔(秒)</label><input class=\"ddns-interval\" type=\"number\" min=\"30\" max=\"86400\" value=\"" + String(record.updateIntervalSeconds) + "\"></div>" +
+                                      "</div>" +
+                                      "<div class=\"inline-check\">" +
+                                      "<input class=\"ddns-local-ip\" type=\"checkbox\"" + (record.useLocalIp ? " checked" : "") + ">" +
+                                      "<label style=\"margin:0;\">使用局域网 IP（仅内网解析场景）</label>" +
+                                      "</div>" +
+                                      "<p class=\"muted\">运行状态：<span class=\"ddns-record-state\">-</span>；最新 IP：<span class=\"ddns-record-ip\">-</span></p>" +
+                                      "</div>");
+                                })
+                                .join("");
+
+      Array.from(container.querySelectorAll(".ddns-remove-button")).forEach(function (button) {
+        button.addEventListener("click", function () {
+          const index = Number(this.dataset.index);
+          const currentRecords = collectDdnsRecordsFromForm();
+          if (Number.isFinite(index) && index >= 0 && index < currentRecords.length) {
+            currentRecords.splice(index, 1);
+            renderDdnsRecords(currentRecords);
+          }
+        });
+      });
+    }
+
+    function addDdnsRecord() {
+      const currentRecords = collectDdnsRecordsFromForm();
+      if (currentRecords.length >= maxDdnsRecords) {
+        setText("ddnsStatus", "最多支持 5 条 DDNS 记录。");
+        return;
+      }
+      currentRecords.push(createDefaultDdnsRecord());
+      renderDdnsRecords(currentRecords);
+      setText("ddnsStatus", "");
+    }
+
+    function ddnsStateLabel(state) {
+      if (state === "DISABLED") return "已禁用";
+      if (state === "WAIT_CONFIG") return "待配置";
+      if (state === "WAIT_WIFI") return "等待 WiFi";
+      if (state === "READY") return "就绪";
+      if (state === "RUNNING") return "运行中";
+      if (state === "UPDATED") return "已更新";
+      if (state === "ERROR") return "异常";
+      return state || "-";
+    }
+
+    function updateDdnsStatus(data) {
+      const state = data.state || data.ddnsState || "-";
+      const message = data.message || data.ddnsMessage || "";
+      const activeRecordCount = Number(
+          data.activeRecordCount !== undefined ? data.activeRecordCount : data.ddnsActiveRecordCount);
+      const totalUpdateCount = Number(
+          data.totalUpdateCount !== undefined ? data.totalUpdateCount : data.ddnsTotalUpdateCount);
+
+      setText("ddnsState", ddnsStateLabel(state));
+      setText("ddnsActiveCount", Number.isFinite(activeRecordCount) ? String(activeRecordCount) : "0");
+      setText("ddnsUpdateCount", Number.isFinite(totalUpdateCount) ? String(totalUpdateCount) : "0");
+      if (message) {
+        setText("ddnsStatus", message);
+      }
+
+      const recordStates = Array.isArray(data.records) ? data.records : [];
+      const cards = Array.from(document.querySelectorAll("#ddnsRecords .ddns-record"));
+      cards.forEach(function (card, index) {
+        const record = recordStates[index];
+        if (!record) {
+          return;
+        }
+
+        const stateElement = card.querySelector(".ddns-record-state");
+        const ipElement = card.querySelector(".ddns-record-ip");
+        if (stateElement) {
+          stateElement.textContent = ddnsStateLabel(record.state || "-");
+        }
+        if (ipElement) {
+          const ip = record.lastNewIp || record.lastOldIp || "-";
+          ipElement.textContent = ip;
+        }
+      });
+    }
+
     async function api(url, options) {
       const response = await fetch(url, Object.assign({ credentials: "same-origin" }, options || {}));
       const text = await response.text();
@@ -953,13 +1325,13 @@ String WebPortal::dashboardPage() const {
       if (code === "ota_busy") return "OTA 任务执行中，请稍后再试。";
       if (code === "ota_too_frequent") return "手动升级触发过于频繁，请稍后重试。";
       if (code === "ota_config_incomplete") return "OTA 配置不完整，请先填写巴法云 UID 和 Topic。";
-      if (code === "ota_no_update") return "巴法云未发布可用新固件。";
-      if (code === "ota_lookup_http_failed") return "查询巴法云 OTA 失败，请检查网络。";
-      if (code === "ota_lookup_http_status") return "巴法云 OTA 接口返回异常状态码。";
-      if (code === "ota_lookup_parse_failed") return "解析巴法云 OTA 响应失败。";
-      if (code === "ota_lookup_rejected") return "巴法云 OTA 拒绝了请求。";
-      if (code === "ota_version_invalid") return "巴法云 OTA 返回的版本号无效。";
-      if (code === "ota_url_missing") return "巴法云 OTA 响应缺少固件地址。";
+      if (code === "ota_no_update") return "未发布可用新固件。";
+      if (code === "ota_lookup_http_failed") return "查询 OTA 失败，请检查网络。";
+      if (code === "ota_lookup_http_status") return "OTA 接口返回异常状态码。";
+      if (code === "ota_lookup_parse_failed") return "解析 OTA 响应失败。";
+      if (code === "ota_lookup_rejected") return "OTA 拒绝了请求。";
+      if (code === "ota_version_invalid") return "OTA 返回的版本号无效。";
+      if (code === "ota_url_missing") return "OTA 响应缺少固件地址。";
       if (code === "ota_update_failed") return "固件更新失败，请查看设备日志。";
       return code || "请求失败";
     }
@@ -1250,10 +1622,13 @@ String WebPortal::dashboardPage() const {
       document.getElementById("bemfaKey").value = data.bemfaKey || "";
       document.getElementById("bemfaHost").value = data.bemfaHost || "bemfa.com";
       document.getElementById("bemfaPort").value = data.bemfaPort || 9501;
+      document.getElementById("ddnsEnabled").checked = !!data.ddnsEnabled;
+      renderDdnsRecords(Array.isArray(data.ddnsRecords) ? data.ddnsRecords : []);
       setText("otaCurrentVersion", data.otaCurrentVersion || "-");
 
       updatePowerStatus(data);
       updateBemfaStatus(data);
+      updateDdnsStatus(data);
       applyStatusPolling(data.statusPollIntervalMinutes);
 
       if (data.wifiConnected) {
@@ -1290,6 +1665,15 @@ String WebPortal::dashboardPage() const {
       }
     }
 
+    async function refreshDdnsStatus() {
+      try {
+        const data = await api("/api/ddns/status");
+        updateDdnsStatus(data);
+      } catch (error) {
+        setText("ddnsStatus", toMessage(error.message));
+      }
+    }
+
     async function refreshOtaStatus() {
       try {
         const data = await api("/api/ota/status");
@@ -1300,7 +1684,11 @@ String WebPortal::dashboardPage() const {
     }
 
     async function refreshAllStatus() {
-      await Promise.all([refreshPowerStatus(), refreshBemfaStatus(), refreshOtaStatus(), refreshSystemInfo()]);
+      await Promise.all([refreshPowerStatus(),
+                         refreshBemfaStatus(),
+                         refreshDdnsStatus(),
+                         refreshOtaStatus(),
+                         refreshSystemInfo()]);
     }
 
     async function powerOn() {
@@ -1447,6 +1835,40 @@ String WebPortal::dashboardPage() const {
       }
     }
 
+    async function saveDdnsConfig(event) {
+      event.preventDefault();
+
+      const records = collectDdnsRecordsFromForm().slice(0, maxDdnsRecords);
+      const params = new URLSearchParams();
+      params.set("ddnsEnabled", document.getElementById("ddnsEnabled").checked ? "1" : "0");
+      params.set("ddnsRecordCount", String(records.length));
+
+      records.forEach(function (record, index) {
+        params.set("ddns" + String(index) + "Enabled", record.enabled ? "1" : "0");
+        params.set("ddns" + String(index) + "Provider", normalizeDdnsProvider(record.provider));
+        params.set("ddns" + String(index) + "Domain", record.domain || "");
+        params.set("ddns" + String(index) + "Username", record.username || "");
+        params.set("ddns" + String(index) + "Password", record.password || "");
+        params.set(
+            "ddns" + String(index) + "IntervalSeconds",
+            String(normalizeDdnsIntervalSeconds(record.updateIntervalSeconds)));
+        params.set("ddns" + String(index) + "UseLocalIp", record.useLocalIp ? "1" : "0");
+      });
+
+      try {
+        await api("/api/config", {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: params.toString()
+        });
+        await loadConfig();
+        await refreshDdnsStatus();
+        setText("ddnsStatus", "DDNS 配置已保存。");
+      } catch (error) {
+        setText("ddnsStatus", toMessage(error.message));
+      }
+    }
+
     async function saveSystemConfig(event) {
       event.preventDefault();
       const params = new URLSearchParams();
@@ -1512,12 +1934,15 @@ String WebPortal::dashboardPage() const {
     document.getElementById("otaUpgradeButton").addEventListener("click", triggerManualOtaUpgrade);
     document.getElementById("configForm").addEventListener("submit", saveConfig);
     document.getElementById("bemfaForm").addEventListener("submit", saveBemfaConfig);
+    document.getElementById("ddnsAddRecordButton").addEventListener("click", addDdnsRecord);
+    document.getElementById("ddnsForm").addEventListener("submit", saveDdnsConfig);
     document.getElementById("systemForm").addEventListener("submit", saveSystemConfig);
     document.getElementById("refreshAllButton").addEventListener("click", refreshAllStatusByButton);
     document.getElementById("passwordForm").addEventListener("submit", savePassword);
 
     window.addEventListener("DOMContentLoaded", async function () {
       updateScanButtonState();
+      renderDdnsRecords([]);
       try {
         await loadConfig();
       } catch (error) {

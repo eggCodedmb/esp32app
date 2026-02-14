@@ -6,6 +6,7 @@
 #include "AuthService.h"
 #include "BemfaService.h"
 #include "ConfigStore.h"
+#include "DdnsService.h"
 #include "FirmwareUpgradeService.h"
 #include "PowerOnService.h"
 #include "WifiService.h"
@@ -18,6 +19,7 @@ class WebPortal {
             ConfigStore& configStore,
             PowerOnService& powerOnService,
             BemfaService& bemfaService,
+            DdnsService& ddnsService,
             FirmwareUpgradeService& firmwareUpgradeService);
 
   void begin();
@@ -38,6 +40,7 @@ class WebPortal {
   ConfigStore& _configStore;
   PowerOnService& _powerOnService;
   BemfaService& _bemfaService;
+  DdnsService& _ddnsService;
   FirmwareUpgradeService& _firmwareUpgradeService;
 
   void registerRoutes();

@@ -7,10 +7,21 @@
 namespace {
 constexpr int kWifiScanRunning = WIFI_SCAN_RUNNING;
 constexpr int kWifiScanFailed = WIFI_SCAN_FAILED;
+
+void ensureStationEnabled() {
+  const wifi_mode_t currentMode = WiFi.getMode();
+  if (currentMode == WIFI_MODE_AP) {
+    WiFi.mode(WIFI_AP_STA);
+    return;
+  }
+  if (currentMode == WIFI_MODE_NULL) {
+    WiFi.mode(WIFI_STA);
+  }
+}
 }  // namespace
 
 WifiScanResult WifiService::scanNetworks() {
-  WiFi.mode(WIFI_AP_STA);
+  ensureStationEnabled();
 
   const uint32_t previousScanAtMs = _lastScanAtMs;
   const bool refreshed = finalizeScanIfReady();
@@ -143,7 +154,7 @@ bool WifiService::connectTo(const String& ssid, const String& password, uint32_t
     return false;
   }
 
-  WiFi.mode(WIFI_AP_STA);
+  ensureStationEnabled();
   WiFi.begin(normalizedSsid.c_str(), password.c_str());
 
   const uint32_t startTime = millis();

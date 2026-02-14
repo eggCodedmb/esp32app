@@ -4,6 +4,7 @@
 #include "AuthService.h"
 #include "BemfaService.h"
 #include "ConfigStore.h"
+#include "DdnsService.h"
 #include "FirmwareUpgradeService.h"
 #include "HostProbeService.h"
 #include "PowerOnService.h"
@@ -13,7 +14,6 @@
 
 namespace {
 constexpr const char* kSetupApSsid = "ESP32-Setup";
-constexpr const char* kSetupApPassword = "12345678";
 
 AuthService authService("admin", "admin123");
 WifiService wifiService;
@@ -22,6 +22,7 @@ WakeOnLanService wakeOnLanService;
 HostProbeService hostProbeService;
 PowerOnService powerOnService(wakeOnLanService, hostProbeService);
 BemfaService bemfaService;
+DdnsService ddnsService;
 FirmwareUpgradeService firmwareUpgradeService;
 WebPortal webPortal(80,
                     authService,
@@ -29,6 +30,7 @@ WebPortal webPortal(80,
                     configStore,
                     powerOnService,
                     bemfaService,
+                    ddnsService,
                     firmwareUpgradeService);
 bool setupApRunning = false;
 bool wifiStateInitialized = false;
@@ -138,7 +140,7 @@ void startSetupAccessPoint() {
   }
 
   WiFi.mode(WIFI_AP_STA);
-  if (!WiFi.softAP(kSetupApSsid, kSetupApPassword)) {
+  if (!WiFi.softAP(kSetupApSsid)) {
     Serial.println("Failed to start setup AP.");
     return;
   }
@@ -191,12 +193,15 @@ void setup() {
 
   syncSetupAccessPoint(wifiService.isConnected());
   bemfaService.begin();
+  ddnsService.begin();
   firmwareUpgradeService.setEventCallback(onFirmwareUpgradeEvent, &bemfaService);
   firmwareUpgradeService.begin();
 
   const BemfaConfig bemfaConfig = configStore.loadBemfaConfig();
+  const DdnsConfig ddnsConfig = configStore.loadDdnsConfig();
   const SystemConfig systemConfig = configStore.loadSystemConfig();
   bemfaService.updateConfig(bemfaConfig);
+  ddnsService.updateConfig(ddnsConfig);
   firmwareUpgradeService.updateConfig(bemfaConfig);
   firmwareUpgradeService.updateAutoCheckConfig(false,
                                                systemConfig.otaAutoCheckIntervalMinutes);
@@ -211,6 +216,7 @@ void loop() {
   syncSetupAccessPoint(wifiConnected);
   powerOnService.tick(wifiConnected);
   bemfaService.tick(wifiConnected);
+  ddnsService.tick(wifiConnected);
   firmwareUpgradeService.tick(wifiConnected);
   handleBemfaCommand(wifiConnected);
   reportPowerStateIfChanged();

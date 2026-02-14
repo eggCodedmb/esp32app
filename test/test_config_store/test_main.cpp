@@ -109,6 +109,62 @@ void test_save_and_load_system_config_roundtrip() {
   TEST_ASSERT_EQUAL_INT32(expected.otaInstalledVersionCode, actual.otaInstalledVersionCode);
 }
 
+void test_load_default_ddns_config_values() {
+  ConfigStore store;
+  const DdnsConfig config = store.loadDdnsConfig();
+
+  TEST_ASSERT_FALSE(config.enabled);
+  TEST_ASSERT_EQUAL_UINT32(0, static_cast<uint32_t>(config.records.size()));
+}
+
+void test_save_and_load_ddns_config_roundtrip() {
+  ConfigStore store;
+  DdnsConfig expected;
+  expected.enabled = true;
+
+  DdnsRecordConfig record0;
+  record0.enabled = true;
+  record0.provider = "duckdns";
+  record0.domain = "demo";
+  record0.username = "token-demo";
+  record0.password = "";
+  record0.updateIntervalSeconds = 300;
+  record0.useLocalIp = false;
+  expected.records.push_back(record0);
+
+  DdnsRecordConfig record1;
+  record1.enabled = true;
+  record1.provider = "noip";
+  record1.domain = "";
+  record1.username = "user-demo";
+  record1.password = "pass-demo";
+  record1.updateIntervalSeconds = 120;
+  record1.useLocalIp = true;
+  expected.records.push_back(record1);
+
+  TEST_ASSERT_TRUE(store.saveDdnsConfig(expected));
+
+  const DdnsConfig actual = store.loadDdnsConfig();
+  TEST_ASSERT_TRUE(actual.enabled);
+  TEST_ASSERT_EQUAL_UINT32(2, static_cast<uint32_t>(actual.records.size()));
+
+  TEST_ASSERT_TRUE(actual.records[0].enabled);
+  TEST_ASSERT_EQUAL_STRING("duckdns", actual.records[0].provider.c_str());
+  TEST_ASSERT_EQUAL_STRING("demo", actual.records[0].domain.c_str());
+  TEST_ASSERT_EQUAL_STRING("token-demo", actual.records[0].username.c_str());
+  TEST_ASSERT_EQUAL_STRING("", actual.records[0].password.c_str());
+  TEST_ASSERT_EQUAL_UINT32(300, actual.records[0].updateIntervalSeconds);
+  TEST_ASSERT_FALSE(actual.records[0].useLocalIp);
+
+  TEST_ASSERT_TRUE(actual.records[1].enabled);
+  TEST_ASSERT_EQUAL_STRING("duckdns", actual.records[1].provider.c_str());
+  TEST_ASSERT_EQUAL_STRING("", actual.records[1].domain.c_str());
+  TEST_ASSERT_EQUAL_STRING("user-demo", actual.records[1].username.c_str());
+  TEST_ASSERT_EQUAL_STRING("pass-demo", actual.records[1].password.c_str());
+  TEST_ASSERT_EQUAL_UINT32(120, actual.records[1].updateIntervalSeconds);
+  TEST_ASSERT_TRUE(actual.records[1].useLocalIp);
+}
+
 void setup() {
   Serial.begin(115200);
   delay(200);
@@ -120,6 +176,8 @@ void setup() {
   RUN_TEST(test_save_and_load_bemfa_config_roundtrip);
   RUN_TEST(test_load_default_system_config_values);
   RUN_TEST(test_save_and_load_system_config_roundtrip);
+  RUN_TEST(test_load_default_ddns_config_values);
+  RUN_TEST(test_save_and_load_ddns_config_roundtrip);
   UNITY_END();
 }
 

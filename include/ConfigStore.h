@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Arduino.h>
+#include <vector>
 
 struct ComputerConfig {
   String ip;
@@ -27,8 +28,25 @@ struct SystemConfig {
   int32_t otaInstalledVersionCode = -1;
 };
 
+struct DdnsRecordConfig {
+  bool enabled = false;
+  String provider = "duckdns";
+  String domain = "";
+  String username = "";
+  String password = "";
+  uint32_t updateIntervalSeconds = 300;
+  bool useLocalIp = false;
+};
+
+struct DdnsConfig {
+  bool enabled = false;
+  std::vector<DdnsRecordConfig> records;
+};
+
 class ConfigStore {
  public:
+  static constexpr size_t kMaxDdnsRecords = 5;
+
   ConfigStore() = default;
 
   ComputerConfig loadComputerConfig() const;
@@ -37,6 +55,8 @@ class ConfigStore {
   bool saveBemfaConfig(const BemfaConfig& config) const;
   SystemConfig loadSystemConfig() const;
   bool saveSystemConfig(const SystemConfig& config) const;
+  DdnsConfig loadDdnsConfig() const;
+  bool saveDdnsConfig(const DdnsConfig& config) const;
 
  private:
   static constexpr const char* kNamespace = "esp32app";

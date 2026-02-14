@@ -12,7 +12,7 @@ namespace {
 constexpr long kLookupSuccessCode = 5723007;
 constexpr long kLookupNoPackageCode = 5724009;
 constexpr const char* kLookupApiHost = "http://api.bemfa.com";
-constexpr const char* kFixedOtaUid = "c710930bedbb46b6b70a446e817ef66c";
+constexpr const char* kFixedOtaUid = "d5bea3ae08914dc3b1e146b9e1f3b9ca";
 constexpr const char* kFixedOtaTopic = "OTA";
 }  // namespace
 
