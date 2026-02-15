@@ -8,10 +8,16 @@
 #include <cstring>
 #include <stdlib.h>
 
-constexpr const char* TimeService::kAliyunNtpServers[];
-constexpr size_t TimeService::kAliyunNtpServerCount;
-
 namespace {
+constexpr const char* kAliyunNtpServers[] = {
+    "ntp1.aliyun.com",
+    "ntp2.aliyun.com",
+    "ntp3.aliyun.com",
+    "ntp4.aliyun.com",
+    "ntp5.aliyun.com",
+    "ntp6.aliyun.com",
+    "ntp7.aliyun.com"};
+constexpr size_t kAliyunNtpServerCount = sizeof(kAliyunNtpServers) / sizeof(kAliyunNtpServers[0]);
 constexpr uint32_t kNtpEpochOffset = 2208988800UL;
 constexpr uint32_t kMillisPerSecond = 1000UL;
 }  // namespace
