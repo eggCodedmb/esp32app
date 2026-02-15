@@ -127,7 +127,14 @@ void WebPortal::registerRoutes() {
       request->send(response);
       return;
     }
-    request->send(200, "text/html; charset=utf-8", loginPage());
+    String message = "";
+    if (request->hasParam("message", false)) {
+      String msgParam = request->getParam("message", false)->value();
+      if (msgParam == "upgrade_success") {
+        message = "固件升级成功，请重新登录";
+      }
+    }
+    request->send(200, "text/html; charset=utf-8", loginPage(message));
   });
 
   _server.on("/login", HTTP_POST, [this](AsyncWebServerRequest* request) {
@@ -756,6 +763,7 @@ String WebPortal::loginPage(const String& errorMessage) const {
     input { width: 100%; box-sizing: border-box; padding: 10px; margin-top: 6px; border: 1px solid #d1d5db; border-radius: 8px; }
     button { margin-top: 16px; width: 100%; padding: 10px; border: 0; border-radius: 8px; background: #2563eb; color: #fff; cursor: pointer; }
     .error { color: #b91c1c; margin: 8px 0 0; font-size: 13px; }
+    .info { color: #2563eb; margin: 8px 0 0; font-size: 13px; }
     .hint { margin-top: 14px; color: #6b7280; font-size: 12px; }
   </style>
 </head>
@@ -776,7 +784,11 @@ String WebPortal::loginPage(const String& errorMessage) const {
 </html>
 )HTML";
 
-  const String errorBlock = errorMessage.isEmpty() ? "" : "<p class=\"error\">" + errorMessage + "</p>";
+  String cssClass = "error";
+  if (errorMessage.indexOf("成功") != -1) {
+    cssClass = "info";
+  }
+  const String errorBlock = errorMessage.isEmpty() ? "" : "<p class=\"" + cssClass + "\">" + errorMessage + "</p>";
   page.replace("__ERROR_BLOCK__", errorBlock);
   return page;
 }
@@ -1512,10 +1524,16 @@ String WebPortal::dashboardPage() const {
       checkButton.disabled = busy;
       checkButton.textContent = busy ? "处理中..." : "手动检测新版本";
 
-      upgradeButton.hidden = !updateAvailable;
-      upgradeButton.disabled = busy;
-      upgradeButton.textContent = busy ? "升级中..." : "升级固件";
-    }
+       upgradeButton.hidden = !updateAvailable;
+       upgradeButton.disabled = busy;
+       upgradeButton.textContent = busy ? "升级中..." : "升级固件";
+
+       if (state === "UPDATED") {
+         setTimeout(function() {
+           window.location.href = "/login?message=upgrade_success";
+         }, 1000);
+       }
+     }
     function formatBytes(value) {
       const bytes = Number(value);
       if (!Number.isFinite(bytes) || bytes < 0) {

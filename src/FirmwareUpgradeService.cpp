@@ -223,7 +223,7 @@ void FirmwareUpgradeService::tick(bool wifiConnected) {
 
   setState("UPDATED", detailMessage);
 #ifndef UNIT_TEST
-  delay(200);
+  delay(5000);
   ESP.restart();
 #endif
 }
