@@ -124,7 +124,7 @@ void test_save_and_load_ddns_config_roundtrip() {
 
   DdnsRecordConfig record0;
   record0.enabled = true;
-  record0.provider = "duckdns";
+  record0.provider = "aliyun";
   record0.domain = "demo";
   record0.username = "token-demo";
   record0.password = "";
@@ -149,7 +149,7 @@ void test_save_and_load_ddns_config_roundtrip() {
   TEST_ASSERT_EQUAL_UINT32(2, static_cast<uint32_t>(actual.records.size()));
 
   TEST_ASSERT_TRUE(actual.records[0].enabled);
-  TEST_ASSERT_EQUAL_STRING("duckdns", actual.records[0].provider.c_str());
+  TEST_ASSERT_EQUAL_STRING("aliyun", actual.records[0].provider.c_str());
   TEST_ASSERT_EQUAL_STRING("demo", actual.records[0].domain.c_str());
   TEST_ASSERT_EQUAL_STRING("token-demo", actual.records[0].username.c_str());
   TEST_ASSERT_EQUAL_STRING("", actual.records[0].password.c_str());
@@ -157,7 +157,7 @@ void test_save_and_load_ddns_config_roundtrip() {
   TEST_ASSERT_FALSE(actual.records[0].useLocalIp);
 
   TEST_ASSERT_TRUE(actual.records[1].enabled);
-  TEST_ASSERT_EQUAL_STRING("duckdns", actual.records[1].provider.c_str());
+  TEST_ASSERT_EQUAL_STRING("aliyun", actual.records[1].provider.c_str());
   TEST_ASSERT_EQUAL_STRING("", actual.records[1].domain.c_str());
   TEST_ASSERT_EQUAL_STRING("user-demo", actual.records[1].username.c_str());
   TEST_ASSERT_EQUAL_STRING("pass-demo", actual.records[1].password.c_str());

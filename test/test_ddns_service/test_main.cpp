@@ -2,9 +2,11 @@
 #include <unity.h>
 
 #include "DdnsService.h"
+#include "ConfigStore.h"
 
 namespace {
-DdnsService service;
+ConfigStore configStore;
+DdnsService service(configStore);
 }
 
 void setUp() {}
@@ -23,7 +25,7 @@ void test_configured_record_is_exposed() {
 
   DdnsRecordConfig record;
   record.enabled = true;
-  record.provider = "duckdns";
+  record.provider = "aliyun";
   record.domain = "demo";
   record.username = "token";
   record.updateIntervalSeconds = 300;
@@ -40,11 +42,11 @@ void test_configured_record_is_exposed() {
 
   const std::vector<DdnsRecordRuntimeStatus> records = service.getRecordStatuses();
   TEST_ASSERT_EQUAL_UINT32(1, static_cast<uint32_t>(records.size()));
-  TEST_ASSERT_EQUAL_STRING("duckdns", records[0].provider.c_str());
+  TEST_ASSERT_EQUAL_STRING("aliyun", records[0].provider.c_str());
   TEST_ASSERT_EQUAL_UINT32(300, records[0].updateIntervalSeconds);
 }
 
-void test_non_duckdns_provider_and_interval_are_normalized() {
+void test_non_aliyun_provider_and_interval_are_normalized() {
   DdnsConfig config;
   config.enabled = true;
 
@@ -59,7 +61,7 @@ void test_non_duckdns_provider_and_interval_are_normalized() {
   service.updateConfig(config);
   const std::vector<DdnsRecordRuntimeStatus> records = service.getRecordStatuses();
   TEST_ASSERT_EQUAL_UINT32(1, static_cast<uint32_t>(records.size()));
-  TEST_ASSERT_EQUAL_STRING("duckdns", records[0].provider.c_str());
+  TEST_ASSERT_EQUAL_STRING("aliyun", records[0].provider.c_str());
   TEST_ASSERT_EQUAL_UINT32(300, records[0].updateIntervalSeconds);
 }
 
@@ -70,7 +72,7 @@ void setup() {
   UNITY_BEGIN();
   RUN_TEST(test_default_status_is_disabled);
   RUN_TEST(test_configured_record_is_exposed);
-  RUN_TEST(test_non_duckdns_provider_and_interval_are_normalized);
+  RUN_TEST(test_non_aliyun_provider_and_interval_are_normalized);
   UNITY_END();
 }
 

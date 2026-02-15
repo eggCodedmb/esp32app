@@ -5,7 +5,7 @@
 #include <ESP.h>
 
 namespace {
-constexpr const char* kDuckdnsProviderId = "duckdns";
+constexpr const char* kProviderId = "aliyun";
 constexpr uint16_t kDefaultStatusPollIntervalMinutes = 3;
 constexpr uint32_t kDefaultDdnsIntervalSeconds = 300;
 constexpr uint32_t kMinDdnsIntervalSeconds = 30;
@@ -81,10 +81,10 @@ String normalizeDdnsProvider(const String& provider) {
   String normalized = provider;
   normalized.trim();
   normalized.toLowerCase();
-  if (normalized == kDuckdnsProviderId) {
+  if (normalized == kProviderId) {
     return normalized;
   }
-  return String(kDuckdnsProviderId);
+  return String(kProviderId);
 }
 
 uint32_t normalizeDdnsIntervalSeconds(uint32_t value) {
@@ -102,6 +102,7 @@ WebPortal::WebPortal(uint16_t port,
                      PowerOnService& powerOnService,
                      BemfaService& bemfaService,
                      DdnsService& ddnsService,
+                     TimeService& timeService,
                      FirmwareUpgradeService& firmwareUpgradeService)
     : _server(port),
       _authService(authService),
@@ -110,6 +111,7 @@ WebPortal::WebPortal(uint16_t port,
       _powerOnService(powerOnService),
       _bemfaService(bemfaService),
       _ddnsService(ddnsService),
+      _timeService(timeService),
       _firmwareUpgradeService(firmwareUpgradeService) {}
 
 void WebPortal::begin() {
@@ -649,7 +651,9 @@ void WebPortal::registerRoutes() {
     body += "\"psramFree\":" + String(psramFree) + ",";
     body += "\"flashTotal\":" + String(flashTotal) + ",";
     body += "\"sketchUsed\":" + String(sketchUsed) + ",";
-    body += "\"flashFree\":" + String(flashFree);
+    body += "\"flashFree\":" + String(flashFree) + ",";
+    body += "\"systemTime\":\"" + jsonEscape(_timeService.getFormattedTime()) + "\",";
+    body += "\"systemTimeUnix\":" + String(_timeService.getUnixTime());
     body += "}";
 
     request->send(200, "application/json", body);
@@ -918,7 +922,7 @@ String WebPortal::dashboardPage() const {
         </div>
         <div class="inline-actions">
           <button type="submit">保存系统配置</button>
-          <button id="refreshAllButton" class="secondary" type="button" hidden>统一刷新状态</button>
+          <button id="refreshAllButton" class="secondary" type="button">统一刷新状态</button>
         </div>
       </form>
       <p id="systemPollStatus" class="muted"></p>
@@ -969,8 +973,9 @@ String WebPortal::dashboardPage() const {
         <div class="metric"><span class="metric-title">堆内存最小空闲</span><span id="espHeapMin" class="metric-value">-</span></div>
         <div class="metric"><span class="metric-title">最大可分配块</span><span id="espHeapMaxAlloc" class="metric-value">-</span></div>
         <div class="metric"><span class="metric-title">Flash 已用/总量</span><span id="espFlash" class="metric-value">-</span></div>
-        <div class="metric"><span class="metric-title">Flash 剩余</span><span id="espFlashFree" class="metric-value">-</span></div>
-      </div>
+         <div class="metric"><span class="metric-title">Flash 剩余</span><span id="espFlashFree" class="metric-value">-</span></div>
+         <div class="metric"><span class="metric-title">系统时间</span><span id="espSystemTime" class="metric-value">-</span></div>
+       </div>
       <p id="espInfoStatus" class="status"></p>
     </section>
 
@@ -1058,9 +1063,14 @@ String WebPortal::dashboardPage() const {
     const allowedStatusPollIntervals = [1, 3, 10, 30, 60];
     let statusPollTimer = 0;
     let otaActionPollTimer = 0;
-    const ddnsProviders = ["duckdns"];
+    const ddnsProviders = ["aliyun"];
     const maxDdnsRecords = 5;
     let ddnsRecordsCache = [];
+    
+    // 时间实时刷新
+    let lastUnixTime = 0;
+    let lastClientEpochSeconds = 0;
+    let timeUpdateTimer = 0;
 
     function normalizeStatusPollIntervalMinutes(value) {
       const minutes = Number(value);
@@ -1139,7 +1149,7 @@ String WebPortal::dashboardPage() const {
       if (ddnsProviders.indexOf(normalized) >= 0) {
         return normalized;
       }
-      return "duckdns";
+      return "aliyun";
     }
 
     function normalizeDdnsIntervalSeconds(value) {
@@ -1169,7 +1179,7 @@ String WebPortal::dashboardPage() const {
     function createDefaultDdnsRecord() {
       return {
         enabled: true,
-        provider: "duckdns",
+        provider: "aliyun",
         domain: "",
         username: "",
         password: "",
@@ -1199,7 +1209,7 @@ String WebPortal::dashboardPage() const {
         const localIpElement = card.querySelector(".ddns-local-ip");
         return normalizeDdnsRecord({
           enabled: enabledElement ? !!enabledElement.checked : false,
-          provider: providerElement ? providerElement.value : "duckdns",
+          provider: providerElement ? providerElement.value : "aliyun",
           domain: domainElement ? domainElement.value : "",
           username: usernameElement ? usernameElement.value : "",
           password: passwordElement ? passwordElement.value : "",
@@ -1235,13 +1245,13 @@ String WebPortal::dashboardPage() const {
                                       "<input class=\"ddns-enabled\" type=\"checkbox\"" + (record.enabled ? " checked" : "") + ">" +
                                       "<label style=\"margin:0;\">启用此记录</label>" +
                                       "</div>" +
-                                      "<div class=\"row\">" +
-                                      "<div><label>服务商</label><select class=\"ddns-provider\">" + ddnsProviderOptions(record.provider) + "</select></div>" +
-                                      "<div><label>域名/主机</label><input class=\"ddns-domain\" autocomplete=\"off\" value=\"" + escapeHtml(record.domain) + "\" placeholder=\"example.ddns.net\"></div>" +
-                                      "<div><label>用户名/Token</label><input class=\"ddns-username\" autocomplete=\"off\" value=\"" + escapeHtml(record.username) + "\"></div>" +
-                                      "<div><label>密码/Key</label><input class=\"ddns-password\" type=\"password\" autocomplete=\"off\" value=\"" + escapeHtml(record.password) + "\"></div>" +
-                                      "<div><label>更新间隔(秒)</label><input class=\"ddns-interval\" type=\"number\" min=\"30\" max=\"86400\" value=\"" + String(record.updateIntervalSeconds) + "\"></div>" +
-                                      "</div>" +
+                                       "<div class=\"row\">" +
+                                       "<div><label>服务商</label><select class=\"ddns-provider\">" + ddnsProviderOptions(record.provider) + "</select></div>" +
+                                       "<div><label>域名/主机</label><input class=\"ddns-domain\" autocomplete=\"off\" value=\"" + escapeHtml(record.domain) + "\" placeholder=\"example.ddns.net\"></div>" +
+                                       "<div><label>用户名/AccessKeyID/Token</label><input class=\"ddns-username\" autocomplete=\"off\" value=\"" + escapeHtml(record.username) + "\"></div>" +
+                                       "<div><label>密码/AccessKeySecret/Key</label><input class=\"ddns-password\" type=\"password\" autocomplete=\"off\" value=\"" + escapeHtml(record.password) + "\"></div>" +
+                                       "<div><label>更新间隔(秒)</label><input class=\"ddns-interval\" type=\"number\" min=\"30\" max=\"86400\" value=\"" + String(record.updateIntervalSeconds) + "\"></div>" +
+                                       "</div>" +
                                       "<div class=\"inline-check\">" +
                                       "<input class=\"ddns-local-ip\" type=\"checkbox\"" + (record.useLocalIp ? " checked" : "") + ">" +
                                       "<label style=\"margin:0;\">使用局域网 IP（仅内网解析场景）</label>" +
@@ -1581,6 +1591,18 @@ String WebPortal::dashboardPage() const {
       setText("espFlash", formatBytes(data.sketchUsed) + " / " + formatBytes(data.flashTotal));
       setText("espFlashFree", formatBytes(data.flashFree));
 
+      // 保存时间戳用于实时更新
+      lastUnixTime = Number(data.systemTimeUnix) || 0;
+      lastClientEpochSeconds = Math.floor(Date.now() / 1000);
+      
+      // 立即更新时间显示
+      updateRealTimeDisplay();
+      
+      // 如果定时器未启动，启动实时更新时间显示
+      if (!timeUpdateTimer && lastUnixTime > 0) {
+        timeUpdateTimer = setInterval(updateRealTimeDisplay, 1000);
+      }
+
       const psramTotal = Number(data.psramTotal) || 0;
       if (psramTotal > 0) {
         setText("espPsram", formatBytes(data.psramFree) + " / " + formatBytes(psramTotal));
@@ -1589,6 +1611,35 @@ String WebPortal::dashboardPage() const {
       }
 
       setText("espInfoStatus", "最后更新：" + new Date().toLocaleTimeString());
+    }
+    
+    // 格式化Unix时间戳为本地时间字符串
+    function formatUnixTime(unixTime) {
+      if (!unixTime || unixTime <= 0) {
+        return "-";
+      }
+      const date = new Date(unixTime * 1000);
+      const year = date.getFullYear();
+      const month = String(date.getMonth() + 1).padStart(2, '0');
+      const day = String(date.getDate()).padStart(2, '0');
+      const hours = String(date.getHours()).padStart(2, '0');
+      const minutes = String(date.getMinutes()).padStart(2, '0');
+      const seconds = String(date.getSeconds()).padStart(2, '0');
+      return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
+    }
+    
+    // 实时更新时间显示
+    function updateRealTimeDisplay() {
+      if (lastUnixTime <= 0) {
+        return;
+      }
+      
+      // 计算当前时间：最后获取的Unix时间 + (当前运行时间 - 最后获取时的运行时间)
+      const nowClientEpochSeconds = Math.floor(Date.now() / 1000);
+      const elapsedSeconds = Math.max(0, nowClientEpochSeconds - lastClientEpochSeconds);
+      const currentUnixTime = lastUnixTime + elapsedSeconds;
+      
+      setText("espSystemTime", formatUnixTime(currentUnixTime));
     }
 
     let wifiScanRequesting = false;

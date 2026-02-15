@@ -9,18 +9,20 @@
 #include "DdnsService.h"
 #include "FirmwareUpgradeService.h"
 #include "PowerOnService.h"
+#include "TimeService.h"
 #include "WifiService.h"
 
 class WebPortal {
  public:
-  WebPortal(uint16_t port,
-            AuthService& authService,
-            WifiService& wifiService,
-            ConfigStore& configStore,
-            PowerOnService& powerOnService,
-            BemfaService& bemfaService,
-            DdnsService& ddnsService,
-            FirmwareUpgradeService& firmwareUpgradeService);
+   WebPortal(uint16_t port,
+             AuthService& authService,
+             WifiService& wifiService,
+             ConfigStore& configStore,
+             PowerOnService& powerOnService,
+             BemfaService& bemfaService,
+             DdnsService& ddnsService,
+             TimeService& timeService,
+             FirmwareUpgradeService& firmwareUpgradeService);
 
   void begin();
 
@@ -41,6 +43,7 @@ class WebPortal {
   PowerOnService& _powerOnService;
   BemfaService& _bemfaService;
   DdnsService& _ddnsService;
+  TimeService& _timeService;
   FirmwareUpgradeService& _firmwareUpgradeService;
 
   void registerRoutes();

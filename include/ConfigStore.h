@@ -30,7 +30,7 @@ struct SystemConfig {
 
 struct DdnsRecordConfig {
   bool enabled = false;
-  String provider = "duckdns";
+  String provider = "aliyun";
   String domain = "";
   String username = "";
   String password = "";

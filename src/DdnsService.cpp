@@ -1,17 +1,18 @@
 #include "DdnsService.h"
+#include "AliyunDdnsClient.h"
+#include "ConfigStore.h"
+#include "PublicIpService.h"
+
+DdnsService::DdnsService(ConfigStore& configStore) : _configStore(configStore) {}
 
 #include <algorithm>
-#include <HTTPClient.h>
-#include <WiFi.h>
 
 namespace
 {
-  constexpr const char *kDuckdnsProviderId = "duckdns";
+  constexpr const char *kProviderId = "aliyun";
   constexpr uint32_t kDefaultDdnsIntervalSeconds = 300;
   constexpr uint32_t kMinDdnsIntervalSeconds = 30;
   constexpr uint32_t kMaxDdnsIntervalSeconds = 86400;
-  constexpr uint32_t kIpProbeTimeoutMs = 5000;
-  constexpr const char *kPublicIpProbeUrl = "http://ifconfig.me/ip";
 
   bool isValidIntervalSeconds(uint32_t value)
   {
@@ -20,14 +21,8 @@ namespace
 
   String normalizeDdnsProvider(const String &provider)
   {
-    String normalized = provider;
-    normalized.trim();
-    normalized.toLowerCase();
-    if (normalized == kDuckdnsProviderId)
-    {
-      return normalized;
-    }
-    return String(kDuckdnsProviderId);
+    // 现在只支持阿里云DDNS
+    return String(kProviderId);
   }
 
   bool ddnsProviderRequiresDomain(const String &provider)
@@ -38,58 +33,48 @@ namespace
 
   bool ddnsProviderRequiresPassword(const String &provider)
   {
-    (void)provider;
-    return false;
+    // 阿里云需要AccessKeySecret作为密码
+    return provider == kProviderId;
   }
 
-  void configureDdnsClient(EasyDDNSClass *client, const DdnsRecordConfig &record)
-  {
-    if (client == nullptr)
-    {
+  void splitDomain(const String& fullDomain, String& rootDomain, String& subDomain) {
+    const int firstDotPos = fullDomain.indexOf('.');
+    const int lastDotPos = fullDomain.lastIndexOf('.');
+    if (firstDotPos == -1) {
+      rootDomain = fullDomain;
+      subDomain = "@";
       return;
     }
 
-    client->service(kDuckdnsProviderId);
-    client->client(record.domain, record.username, record.password);
-  }
-
-  String probePublicIp()
-  {
-    WiFiClient client;
-    HTTPClient http;
-    String ip = "";
-    http.setConnectTimeout(kIpProbeTimeoutMs);
-    http.setTimeout(kIpProbeTimeoutMs);
-    http.setFollowRedirects(HTTPC_FORCE_FOLLOW_REDIRECTS);
-    if (!http.begin(client, kPublicIpProbeUrl))
-    {
-      return ip;
+    // one dot: treat as apex domain, RR should be '@'
+    if (firstDotPos == lastDotPos) {
+      rootDomain = fullDomain;
+      subDomain = "@";
+      return;
     }
 
-    const int httpCode = http.GET();
-    if (httpCode == HTTP_CODE_OK)
-    {
-      ip = http.getString();
-      ip.trim();
-    }
-    http.end();
-    return ip;
-  }
-
-  String probeCurrentIp(bool useLocalIp)
-  {
-    if (useLocalIp)
-    {
-      const String ip = WiFi.localIP().toString();
-      if (ip == "0.0.0.0")
-      {
-        return "";
-      }
-      return ip;
-    }
-    return probePublicIp();
+    subDomain = fullDomain.substring(0, firstDotPos);
+    rootDomain = fullDomain.substring(firstDotPos + 1);
   }
 } // namespace
+
+void DdnsService::configureRuntimeRecord(RuntimeRecord* runtime) {
+  if (runtime == nullptr) {
+    return;
+  }
+  
+  // For Aliyun, username = AccessKeyId, password = AccessKeySecret
+  // domain is the full domain (e.g., "www.hupokeji.top")
+  String rootDomain, subDomain;
+  splitDomain(runtime->config.domain, rootDomain, subDomain);
+  runtime->client.begin(
+    runtime->config.username,
+    runtime->config.password,
+    rootDomain,
+    subDomain
+  );
+}
+
 
 void DdnsService::begin()
 {
@@ -250,14 +235,14 @@ void DdnsService::tick(bool wifiConnected)
       continue;
     }
 
-    const String observedIp = probeCurrentIp(record.config.useLocalIp);
+    const String observedIp = PublicIpService::resolve(record.config.useLocalIp);
     if (!observedIp.isEmpty())
     {
       record.lastNewIp = observedIp;
     }
 
     const uint32_t updateCountBefore = record.updateCount;
-    record.client.update(0UL, record.config.useLocalIp);
+    record.client.update(now, record.config.useLocalIp);
     record.firstSyncPending = false;
     record.nextSyncDueAtMs = now + intervalMs;
 
@@ -433,7 +418,7 @@ void DdnsService::rebuildRuntimeRecords()
   {
     RuntimeRecord runtime{};
     runtime.config = _config.records[index];
-    configureDdnsClient(&runtime.client, runtime.config);
+    configureRuntimeRecord(&runtime);
 
     if (!runtime.config.enabled)
     {
@@ -456,9 +441,9 @@ void DdnsService::rebuildRuntimeRecords()
 
   for (size_t index = 0; index < _runtimeRecords.size(); ++index)
   {
-    _runtimeRecords[index].client.onUpdate([this, index](const char *oldIp, const char *newIp)
-                                           {
-
+    RuntimeRecord& record = _runtimeRecords[index];
+    auto onUpdateCallback = [this, index](const char *oldIp, const char *newIp)
+    {
       if (index >= _runtimeRecords.size()) {
         return;
       }
@@ -478,7 +463,10 @@ void DdnsService::rebuildRuntimeRecords()
       }
 
       _totalUpdateCount += 1;
-      setState("RUNNING", "DDNS update completed."); });
+      setState("RUNNING", "DDNS update completed.");
+    };
+
+    record.client.onUpdate(onUpdateCallback);
   }
 }
 

@@ -1,10 +1,10 @@
 #pragma once
 
 #include <Arduino.h>
-#include <EasyDDNS.h>
 #include <vector>
 
 #include "ConfigStore.h"
+#include "AliyunDdnsClient.h"
 
 struct DdnsRecordRuntimeStatus {
   bool enabled = false;
@@ -33,8 +33,10 @@ struct DdnsRuntimeStatus {
 };
 
 class DdnsService {
- public:
-  DdnsService() = default;
+  public:
+   static constexpr const char* kProviderId = "aliyun";
+
+   DdnsService(ConfigStore& configStore);
 
   void begin();
   void updateConfig(const DdnsConfig& config);
@@ -46,7 +48,7 @@ class DdnsService {
  private:
   struct RuntimeRecord {
     DdnsRecordConfig config;
-    EasyDDNSClass client{};
+    AliyunDdnsClient client{};
     String state = "IDLE";
     String message = "";
     String lastOldIp = "";
@@ -66,9 +68,11 @@ class DdnsService {
   void rebuildRuntimeRecords();
   void setState(const String& state, const String& message);
   void setRecordState(RuntimeRecord* record, const String& state, const String& message);
+  void configureRuntimeRecord(RuntimeRecord* runtime);
 
-  DdnsConfig _config;
-  std::vector<RuntimeRecord> _runtimeRecords;
+   ConfigStore& _configStore;
+   DdnsConfig _config;
+   std::vector<RuntimeRecord> _runtimeRecords;
 
   bool _begun = false;
   bool _wifiConnected = false;

@@ -11,6 +11,7 @@
 #include "WakeOnLanService.h"
 #include "WebPortal.h"
 #include "WifiService.h"
+#include "TimeService.h"
 
 namespace {
 AuthService auth("admin", "admin123");
@@ -20,7 +21,8 @@ WakeOnLanService wol;
 HostProbeService probe;
 PowerOnService powerOnService(wol, probe);
 BemfaService bemfaService;
-DdnsService ddnsService;
+TimeService timeService;
+DdnsService ddnsService(config);
 FirmwareUpgradeService firmwareUpgradeService;
 WebPortal portal(80,
                  auth,
@@ -29,6 +31,7 @@ WebPortal portal(80,
                  powerOnService,
                  bemfaService,
                  ddnsService,
+                 timeService,
                  firmwareUpgradeService);
 }  // namespace
 

@@ -11,6 +11,7 @@
 #include "WakeOnLanService.h"
 #include "WebPortal.h"
 #include "WifiService.h"
+#include "TimeService.h"
 
 namespace {
 constexpr const char* kSetupApSsid = "ESP32-Setup";
@@ -22,7 +23,8 @@ WakeOnLanService wakeOnLanService;
 HostProbeService hostProbeService;
 PowerOnService powerOnService(wakeOnLanService, hostProbeService);
 BemfaService bemfaService;
-DdnsService ddnsService;
+DdnsService ddnsService(configStore);
+TimeService timeService;
 FirmwareUpgradeService firmwareUpgradeService;
 WebPortal webPortal(80,
                     authService,
@@ -30,8 +32,9 @@ WebPortal webPortal(80,
                     configStore,
                     powerOnService,
                     bemfaService,
-                    ddnsService,
-                    firmwareUpgradeService);
+                     ddnsService,
+                     timeService,
+                     firmwareUpgradeService);
 bool setupApRunning = false;
 bool wifiStateInitialized = false;
 bool lastWifiConnected = false;
@@ -184,7 +187,7 @@ void setup() {
   authService.begin();
   const bool restored = wifiService.reconnectFromStored();
   if (restored) {
-    Serial.print("Connected using stored WiFi credentials: ");
+    Serial.print("WiFi: ");
     Serial.println(wifiService.currentSsid());
   } else {
     Serial.print("Stored WiFi reconnect not ready: ");
@@ -194,6 +197,7 @@ void setup() {
   syncSetupAccessPoint(wifiService.isConnected());
   bemfaService.begin();
   ddnsService.begin();
+  timeService.begin();
   firmwareUpgradeService.setEventCallback(onFirmwareUpgradeEvent, &bemfaService);
   firmwareUpgradeService.begin();
 
@@ -216,6 +220,7 @@ void loop() {
   syncSetupAccessPoint(wifiConnected);
   powerOnService.tick(wifiConnected);
   bemfaService.tick(wifiConnected);
+  timeService.tick(wifiConnected);
   ddnsService.tick(wifiConnected);
   firmwareUpgradeService.tick(wifiConnected);
   handleBemfaCommand(wifiConnected);

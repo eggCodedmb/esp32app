@@ -3,7 +3,7 @@
 #include <Preferences.h>
 
 namespace {
-constexpr const char* kDuckdnsProviderId = "duckdns";
+constexpr const char* kProviderId = "aliyun";
 constexpr const char* kComputerIpKey = "pc_ip";
 constexpr const char* kComputerMacKey = "pc_mac";
 constexpr const char* kComputerPortKey = "pc_port";
@@ -48,13 +48,8 @@ uint32_t normalizeDdnsIntervalSeconds(uint32_t value) {
 }
 
 String normalizeDdnsProvider(const String& provider) {
-  String normalized = provider;
-  normalized.trim();
-  normalized.toLowerCase();
-  if (normalized == kDuckdnsProviderId) {
-    return normalized;
-  }
-  return String(kDuckdnsProviderId);
+  // 现在只支持阿里云DDNS
+  return String(kProviderId);
 }
 
 void normalizeDdnsRecord(DdnsRecordConfig* record) {
@@ -253,6 +248,8 @@ bool ConfigStore::saveDdnsConfig(const DdnsConfig& config) const {
     preferences.putString(ddnsRecordKey(index, "dm").c_str(), record.domain);
     preferences.putString(ddnsRecordKey(index, "ur").c_str(), record.username);
     preferences.putString(ddnsRecordKey(index, "pw").c_str(), record.password);
+    // RecordId is now auto-discovered at runtime and no longer persisted.
+    preferences.remove(ddnsRecordKey(index, "ri").c_str());
     preferences.putUInt(ddnsRecordKey(index, "iv").c_str(), record.updateIntervalSeconds);
     preferences.putBool(ddnsRecordKey(index, "li").c_str(), record.useLocalIp);
   }
@@ -263,6 +260,7 @@ bool ConfigStore::saveDdnsConfig(const DdnsConfig& config) const {
     preferences.remove(ddnsRecordKey(index, "dm").c_str());
     preferences.remove(ddnsRecordKey(index, "ur").c_str());
     preferences.remove(ddnsRecordKey(index, "pw").c_str());
+    preferences.remove(ddnsRecordKey(index, "ri").c_str());
     preferences.remove(ddnsRecordKey(index, "iv").c_str());
     preferences.remove(ddnsRecordKey(index, "li").c_str());
   }
