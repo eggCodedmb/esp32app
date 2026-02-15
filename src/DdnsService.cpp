@@ -4,10 +4,9 @@
 #include <HTTPClient.h>
 #include <WiFi.h>
 
-#include "DdnsProviderRegistry.h"
-
 namespace
 {
+  constexpr const char *kDuckdnsProviderId = "duckdns";
   constexpr uint32_t kDefaultDdnsIntervalSeconds = 300;
   constexpr uint32_t kMinDdnsIntervalSeconds = 30;
   constexpr uint32_t kMaxDdnsIntervalSeconds = 86400;
@@ -17,6 +16,41 @@ namespace
   bool isValidIntervalSeconds(uint32_t value)
   {
     return value >= kMinDdnsIntervalSeconds && value <= kMaxDdnsIntervalSeconds;
+  }
+
+  String normalizeDdnsProvider(const String &provider)
+  {
+    String normalized = provider;
+    normalized.trim();
+    normalized.toLowerCase();
+    if (normalized == kDuckdnsProviderId)
+    {
+      return normalized;
+    }
+    return String(kDuckdnsProviderId);
+  }
+
+  bool ddnsProviderRequiresDomain(const String &provider)
+  {
+    (void)provider;
+    return true;
+  }
+
+  bool ddnsProviderRequiresPassword(const String &provider)
+  {
+    (void)provider;
+    return false;
+  }
+
+  void configureDdnsClient(EasyDDNSClass *client, const DdnsRecordConfig &record)
+  {
+    if (client == nullptr)
+    {
+      return;
+    }
+
+    client->service(kDuckdnsProviderId);
+    client->client(record.domain, record.username, record.password);
   }
 
   String probePublicIp()
@@ -301,7 +335,7 @@ void DdnsService::normalizeRecord(DdnsRecordConfig *record)
     return;
   }
 
-  record->provider = DdnsProviderRegistry::normalizeProvider(record->provider);
+  record->provider = normalizeDdnsProvider(record->provider);
   record->domain.trim();
   record->username.trim();
   record->password.trim();
@@ -341,11 +375,11 @@ bool DdnsService::isRecordConfigured(const DdnsRecordConfig &record)
   {
     return false;
   }
-  if (DdnsProviderRegistry::providerRequiresDomain(record.provider) && record.domain.isEmpty())
+  if (ddnsProviderRequiresDomain(record.provider) && record.domain.isEmpty())
   {
     return false;
   }
-  if (DdnsProviderRegistry::providerRequiresPassword(record.provider) && record.password.isEmpty())
+  if (ddnsProviderRequiresPassword(record.provider) && record.password.isEmpty())
   {
     return false;
   }
@@ -399,11 +433,7 @@ void DdnsService::rebuildRuntimeRecords()
   {
     RuntimeRecord runtime{};
     runtime.config = _config.records[index];
-    DdnsProviderRegistry::configureClient(&runtime.client,
-                                          runtime.config.provider,
-                                          runtime.config.domain,
-                                          runtime.config.username,
-                                          runtime.config.password);
+    configureDdnsClient(&runtime.client, runtime.config);
 
     if (!runtime.config.enabled)
     {

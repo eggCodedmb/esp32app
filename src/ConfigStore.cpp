@@ -2,9 +2,8 @@
 
 #include <Preferences.h>
 
-#include "DdnsProviderRegistry.h"
-
 namespace {
+constexpr const char* kDuckdnsProviderId = "duckdns";
 constexpr const char* kComputerIpKey = "pc_ip";
 constexpr const char* kComputerMacKey = "pc_mac";
 constexpr const char* kComputerPortKey = "pc_port";
@@ -48,12 +47,22 @@ uint32_t normalizeDdnsIntervalSeconds(uint32_t value) {
   return value;
 }
 
+String normalizeDdnsProvider(const String& provider) {
+  String normalized = provider;
+  normalized.trim();
+  normalized.toLowerCase();
+  if (normalized == kDuckdnsProviderId) {
+    return normalized;
+  }
+  return String(kDuckdnsProviderId);
+}
+
 void normalizeDdnsRecord(DdnsRecordConfig* record) {
   if (record == nullptr) {
     return;
   }
 
-  record->provider = DdnsProviderRegistry::normalizeProvider(record->provider);
+  record->provider = normalizeDdnsProvider(record->provider);
   record->domain.trim();
   record->username.trim();
   record->password.trim();

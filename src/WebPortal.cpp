@@ -4,9 +4,8 @@
 #include <cstdio>
 #include <ESP.h>
 
-#include "DdnsProviderRegistry.h"
-
 namespace {
+constexpr const char* kDuckdnsProviderId = "duckdns";
 constexpr uint16_t kDefaultStatusPollIntervalMinutes = 3;
 constexpr uint32_t kDefaultDdnsIntervalSeconds = 300;
 constexpr uint32_t kMinDdnsIntervalSeconds = 30;
@@ -79,7 +78,13 @@ uint16_t parseStatusPollIntervalMinutes(const String& value, uint16_t defaultVal
 }
 
 String normalizeDdnsProvider(const String& provider) {
-  return DdnsProviderRegistry::normalizeProvider(provider);
+  String normalized = provider;
+  normalized.trim();
+  normalized.toLowerCase();
+  if (normalized == kDuckdnsProviderId) {
+    return normalized;
+  }
+  return String(kDuckdnsProviderId);
 }
 
 uint32_t normalizeDdnsIntervalSeconds(uint32_t value) {
