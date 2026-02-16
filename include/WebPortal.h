@@ -32,7 +32,7 @@ class WebPortal {
     return parseBoolValue(value, defaultValue);
   }
   String testLoginPage(const String& errorMessage = "") const { return loginPage(errorMessage); }
-  String testDashboardPage() const { return dashboardPage(); }
+  String testDashboardPage() const { return String(dashboardPage()); }
 #endif
 
  private:
@@ -50,7 +50,7 @@ class WebPortal {
   bool ensureAuthorized(AsyncWebServerRequest* request, bool apiRequest) const;
 
   String loginPage(const String& errorMessage = "") const;
-  String dashboardPage() const;
+  const char* dashboardPage() const;
 
   static String jsonEscape(const String& value);
   static bool parseBoolValue(const String& value, bool defaultValue = false);
