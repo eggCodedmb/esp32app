@@ -18,7 +18,6 @@ constexpr const char* kSignatureMethod = "HMAC-SHA1";
 constexpr const char* kSignatureVersion = "1.0";
 constexpr const char* kApiVersion = "2015-01-09";
 constexpr const char* kRecordTypeIpv4 = "A";
-constexpr const char* kRecordTypeIpv6 = "AAAA";
 constexpr const char* kUserAgent = "ESP32-Aliyun-DDNS/1.0";
 }  // namespace
 
@@ -27,13 +26,11 @@ AliyunDdnsClient::AliyunDdnsClient() {}
 void AliyunDdnsClient::begin(const String& accessKeyId,
                              const String& accessKeySecret,
                              const String& domain,
-                             const String& subDomain,
-                             bool useIpv6) {
+                             const String& subDomain) {
   _accessKeyId = accessKeyId;
   _accessKeySecret = accessKeySecret;
   _domain = domain;
   _subDomain = subDomain;
-  _useIpv6 = useIpv6;
   _recordId = "";
   _recordIdValid = false;
   _lastApiResponse = "";
@@ -52,7 +49,7 @@ void AliyunDdnsClient::update(uint32_t now, bool useLocalIp) {
     return;
   }
 
-  const String newIp = PublicIpService::resolve(useLocalIp, _useIpv6, kRequestTimeoutMs / 2);
+  const String newIp = PublicIpService::resolve(useLocalIp, kRequestTimeoutMs / 2);
   if (newIp.isEmpty()) {
     return;
   }
@@ -303,7 +300,7 @@ String AliyunDdnsClient::base64Encode(const uint8_t* data, size_t length) const 
 }
 
 const char* AliyunDdnsClient::recordType() const {
-  return _useIpv6 ? kRecordTypeIpv6 : kRecordTypeIpv4;
+  return kRecordTypeIpv4;
 }
 
 String AliyunDdnsClient::buildCommonParams(const String& action) const {

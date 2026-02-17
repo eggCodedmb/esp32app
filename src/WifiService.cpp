@@ -163,8 +163,6 @@ bool WifiService::connectTo(const String& ssid, const String& password, uint32_t
   }
 
   if (WiFi.status() == WL_CONNECTED) {
-    // Best effort: enable station IPv6 so AAAA/DDNS flows can resolve global IPv6.
-    WiFi.enableIpV6();
     const bool persisted = persistCredentials(normalizedSsid, password);
     _lastMessage = persisted ? ("Connected to " + normalizedSsid + ".")
                              : ("Connected to " + normalizedSsid + ", but failed to save credentials.");

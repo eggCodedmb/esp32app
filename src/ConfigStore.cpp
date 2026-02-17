@@ -220,7 +220,6 @@ DdnsConfig ConfigStore::loadDdnsConfig() const {
         preferences.getUInt(ddnsRecordKey(index, "iv").c_str(), record.updateIntervalSeconds);
     record.useLocalIp =
         preferences.getBool(ddnsRecordKey(index, "li").c_str(), record.useLocalIp);
-    record.useIpv6 = preferences.getBool(ddnsRecordKey(index, "v6").c_str(), record.useIpv6);
     normalizeDdnsRecord(&record);
     config.records.push_back(record);
   }
@@ -253,7 +252,8 @@ bool ConfigStore::saveDdnsConfig(const DdnsConfig& config) const {
     preferences.remove(ddnsRecordKey(index, "ri").c_str());
     preferences.putUInt(ddnsRecordKey(index, "iv").c_str(), record.updateIntervalSeconds);
     preferences.putBool(ddnsRecordKey(index, "li").c_str(), record.useLocalIp);
-    preferences.putBool(ddnsRecordKey(index, "v6").c_str(), record.useIpv6);
+    // Cleanup legacy IPv6 flag key.
+    preferences.remove(ddnsRecordKey(index, "v6").c_str());
   }
 
   for (size_t index = recordCount; index < kMaxDdnsRecords; ++index) {

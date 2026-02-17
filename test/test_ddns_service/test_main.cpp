@@ -29,7 +29,6 @@ void test_configured_record_is_exposed() {
   record.domain = "demo";
   record.username = "token";
   record.updateIntervalSeconds = 300;
-  record.useIpv6 = true;
   config.records.push_back(record);
 
   service.updateConfig(config);
@@ -45,7 +44,6 @@ void test_configured_record_is_exposed() {
   TEST_ASSERT_EQUAL_UINT32(1, static_cast<uint32_t>(records.size()));
   TEST_ASSERT_EQUAL_STRING("aliyun", records[0].provider.c_str());
   TEST_ASSERT_EQUAL_UINT32(300, records[0].updateIntervalSeconds);
-  TEST_ASSERT_TRUE(records[0].useIpv6);
 }
 
 void test_non_aliyun_provider_and_interval_are_normalized() {

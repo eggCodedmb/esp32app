@@ -847,7 +847,7 @@ const char* WebPortal::dashboardPage() const {
       const hostType = normalizeDdnsHostType(
           source.hostType !== undefined ? source.hostType : parsedDomain.hostType);
       const recordType = normalizeDdnsRecordType(
-          source.recordType !== undefined ? source.recordType : (source.useIpv6 ? "AAAA" : "A"));
+          source.recordType !== undefined ? source.recordType : "A");
       const ttl = normalizeDdnsIntervalSeconds(
           source.ttl !== undefined ? source.ttl : source.updateIntervalSeconds);
       const domain = buildDdnsFullDomain(rootDomain, hostType);
@@ -863,7 +863,6 @@ const char* WebPortal::dashboardPage() const {
         ttl: ttl,
         updateIntervalSeconds: ttl,
         useLocalIp: !!source.useLocalIp,
-        useIpv6: recordType === "AAAA",
         value: String(source.value || "").trim(),
         recordId: String(source.recordId || "").trim(),
         editing: !!source.editing,
@@ -880,7 +879,8 @@ const char* WebPortal::dashboardPage() const {
     }
 
     function normalizeDdnsRecordType(value) {
-      return String(value || "").trim().toUpperCase() === "AAAA" ? "AAAA" : "A";
+      // DDNS now supports IPv4 A record only.
+      return "A";
     }
 
     function normalizeAliyunRecord(record) {
@@ -916,7 +916,6 @@ const char* WebPortal::dashboardPage() const {
         ttl: 300,
         updateIntervalSeconds: 300,
         useLocalIp: false,
-        useIpv6: false,
         value: "",
         recordId: "",
         editing: true,
@@ -970,8 +969,7 @@ const char* WebPortal::dashboardPage() const {
 
     function ddnsTypeOptions(selectedType) {
       const normalized = normalizeDdnsRecordType(selectedType);
-      return "<option value=\"A\"" + (normalized === "A" ? " selected" : "") + ">A</option>" +
-             "<option value=\"AAAA\"" + (normalized === "AAAA" ? " selected" : "") + ">AAAA</option>";
+      return "<option value=\"A\"" + (normalized === "A" ? " selected" : "") + ">A</option>";
     }
 
     function updateDdnsCardPreview(card) {

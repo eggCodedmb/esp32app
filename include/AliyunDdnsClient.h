@@ -14,8 +14,7 @@ class AliyunDdnsClient {
   void begin(const String& accessKeyId,
              const String& accessKeySecret,
              const String& domain,
-             const String& subDomain = "@",
-             bool useIpv6 = false);
+             const String& subDomain = "@");
 
   void update(uint32_t now, bool useLocalIp);
   void onUpdate(UpdateCallback callback);
@@ -82,5 +81,4 @@ class AliyunDdnsClient {
 
   bool _begun = false;
   bool _recordIdValid = false;
-  bool _useIpv6 = false;
 };

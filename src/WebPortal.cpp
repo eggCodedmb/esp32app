@@ -13,7 +13,8 @@ constexpr uint16_t kDefaultStatusPollIntervalMinutes = 3;
 constexpr uint32_t kDefaultDdnsIntervalSeconds = 300;
 constexpr uint32_t kMinDdnsIntervalSeconds = 30;
 constexpr uint32_t kMaxDdnsIntervalSeconds = 86400;
-constexpr uint32_t kAliyunResolveTimeoutMs = 5000;
+// Web handlers run in AsyncTCP context; keep resolve timeout short to avoid long blocking.
+constexpr uint32_t kAliyunResolveTimeoutMs = 1000;
 
 bool normalizeMacAddress(const String& source, String* normalized) {
   if (normalized == nullptr) {
@@ -125,12 +126,7 @@ String normalizeDdnsHostType(const String& hostType) {
 }
 
 String normalizeDdnsRecordType(const String& type) {
-  String normalized = type;
-  normalized.trim();
-  normalized.toUpperCase();
-  if (normalized == "AAAA") {
-    return "AAAA";
-  }
+  (void)type;
   return "A";
 }
 
@@ -181,14 +177,14 @@ String buildAliyunFullDomain(const String& rootDomain, const String& rr) {
   return normalizedRr == "@" ? normalizedRoot : normalizedRr + "." + normalizedRoot;
 }
 
-String normalizeAliyunRecordType(const String& type, bool useIpv6Default) {
+String normalizeAliyunRecordType(const String& type) {
   String normalized = type;
   normalized.trim();
   normalized.toUpperCase();
-  if (normalized == "A" || normalized == "AAAA") {
-    return normalized;
+  if (normalized == "A") {
+    return "A";
   }
-  return useIpv6Default ? String("AAAA") : String("A");
+  return "A";
 }
 
 String buildAliyunApiError(const String& errorCode, const String& apiResponse) {
@@ -202,8 +198,7 @@ String buildAliyunApiError(const String& errorCode, const String& apiResponse) {
 }
 
 bool resolveAliyunRecordValue(String* value,
-                              const DdnsRecordConfig& configRecord,
-                              const String& recordType) {
+                              const DdnsRecordConfig& configRecord) {
   if (value == nullptr) {
     return false;
   }
@@ -212,12 +207,7 @@ bool resolveAliyunRecordValue(String* value,
     return true;
   }
 
-  const bool useIpv6 = recordType == "AAAA";
-  *value = PublicIpService::resolve(configRecord.useLocalIp, useIpv6, kAliyunResolveTimeoutMs);
-  if (value->isEmpty() && useIpv6 && !configRecord.useLocalIp) {
-    // Retry with local IPv6 preference as fallback.
-    *value = PublicIpService::resolve(true, true, kAliyunResolveTimeoutMs);
-  }
+  *value = PublicIpService::resolve(configRecord.useLocalIp, kAliyunResolveTimeoutMs);
   value->trim();
   return !value->isEmpty();
 }
@@ -487,7 +477,7 @@ AliyunDdnsListResult fetchAliyunDdnsList(const DdnsConfig& ddnsConfig) {
     queriedKeys.push_back(queryKey);
 
     AliyunDdnsClient client;
-    client.begin(record.username, record.password, rootDomain, "@", record.useIpv6);
+    client.begin(record.username, record.password, rootDomain, "@");
     if (!client.describeDomainRecords(rootDomain)) {
       continue;
     }
@@ -619,7 +609,7 @@ void WebPortal::registerRoutes() {
       if (rootDomain.isEmpty()) {
         rootDomain = record.domain;
       }
-      const String recordType = record.useIpv6 ? String("AAAA") : String("A");
+      const String recordType = "A";
       ddnsConfigRecordsBody += "{";
       ddnsConfigRecordsBody += "\"enabled\":" + String(record.enabled ? "true" : "false") + ",";
       ddnsConfigRecordsBody += "\"provider\":\"" + jsonEscape(record.provider) + "\",";
@@ -631,8 +621,7 @@ void WebPortal::registerRoutes() {
       ddnsConfigRecordsBody += "\"password\":\"" + jsonEscape(record.password) + "\",";
       ddnsConfigRecordsBody += "\"ttl\":" + String(record.updateIntervalSeconds) + ",";
       ddnsConfigRecordsBody += "\"updateIntervalSeconds\":" + String(record.updateIntervalSeconds) + ",";
-      ddnsConfigRecordsBody += "\"useLocalIp\":" + String(record.useLocalIp ? "true" : "false") + ",";
-      ddnsConfigRecordsBody += "\"useIpv6\":" + String(record.useIpv6 ? "true" : "false");
+      ddnsConfigRecordsBody += "\"useLocalIp\":" + String(record.useLocalIp ? "true" : "false");
       ddnsConfigRecordsBody += "}";
       if (index + 1 < ddnsConfig.records.size()) {
         ddnsConfigRecordsBody += ",";
@@ -846,20 +835,10 @@ void WebPortal::registerRoutes() {
           record.useLocalIp = parseBoolValue(request->getParam(key, true)->value(), false);
         }
 
-        bool hasRecordTypeParam = false;
-        String recordType = "A";
         key = "ddns" + String(index) + "RecordType";
         if (request->hasParam(key, true)) {
-          hasRecordTypeParam = true;
-          recordType = normalizeDdnsRecordType(request->getParam(key, true)->value());
-        }
-        if (hasRecordTypeParam) {
-          record.useIpv6 = recordType == "AAAA";
-        }
-
-        key = "ddns" + String(index) + "UseIpv6";
-        if (!hasRecordTypeParam && request->hasParam(key, true)) {
-          record.useIpv6 = parseBoolValue(request->getParam(key, true)->value(), false);
+          // IPv6 has been removed. Keep parameter handling for backward compatibility.
+          (void)normalizeDdnsRecordType(request->getParam(key, true)->value());
         }
 
         ddnsConfig.records.push_back(record);
@@ -1004,7 +983,7 @@ void WebPortal::registerRoutes() {
       if (rootDomain.isEmpty()) {
         rootDomain = record.domain;
       }
-      const String recordType = record.useIpv6 ? String("AAAA") : String("A");
+      const String recordType = "A";
       body += "{";
       body += "\"enabled\":" + String(record.enabled ? "true" : "false") + ",";
       body += "\"configured\":" + String(record.configured ? "true" : "false") + ",";
@@ -1017,7 +996,6 @@ void WebPortal::registerRoutes() {
       body += "\"ttl\":" + String(record.updateIntervalSeconds) + ",";
       body += "\"updateIntervalSeconds\":" + String(record.updateIntervalSeconds) + ",";
       body += "\"useLocalIp\":" + String(record.useLocalIp ? "true" : "false") + ",";
-      body += "\"useIpv6\":" + String(record.useIpv6 ? "true" : "false") + ",";
       body += "\"state\":\"" + jsonEscape(record.state) + "\",";
       body += "\"message\":\"" + jsonEscape(record.message) + "\",";
       body += "\"lastOldIp\":\"" + jsonEscape(record.lastOldIp) + "\",";
@@ -1060,7 +1038,7 @@ void WebPortal::registerRoutes() {
     }
 
     AliyunDdnsClient client;
-    client.begin(configRecord.username, configRecord.password, rootDomain, "@", configRecord.useIpv6);
+    client.begin(configRecord.username, configRecord.password, rootDomain, "@");
     if (!client.describeDomainRecords(rootDomain)) {
       const String errorMessage = buildAliyunApiError("describe_failed", client.getLastApiResponse());
       request->send(500,
@@ -1111,16 +1089,15 @@ void WebPortal::registerRoutes() {
     } else if (request->hasParam("recordType", true)) {
       requestedType = request->getParam("recordType", true)->value();
     }
-    const String type = normalizeAliyunRecordType(requestedType, configRecord.useIpv6);
+    const String type = normalizeAliyunRecordType(requestedType);
     String value = request->hasParam("value", true) ? request->getParam("value", true)->value() : "";
-    if (!resolveAliyunRecordValue(&value, configRecord, type)) {
-      const String errorCode = type == "AAAA" ? String("ipv6_unavailable") : String("value_required");
-      request->send(400, "application/json", "{\"success\":false,\"error\":\"" + errorCode + "\"}");
+    if (!resolveAliyunRecordValue(&value, configRecord)) {
+      request->send(400, "application/json", "{\"success\":false,\"error\":\"value_required\"}");
       return;
     }
 
     AliyunDdnsClient client;
-    client.begin(configRecord.username, configRecord.password, rootDomain, "@", type == "AAAA");
+    client.begin(configRecord.username, configRecord.password, rootDomain, "@");
     if (!client.addDomainRecord(rootDomain, rr, type, value)) {
       const String errorMessage = buildAliyunApiError("add_failed", client.getLastApiResponse());
       request->send(500,
@@ -1178,11 +1155,11 @@ void WebPortal::registerRoutes() {
     } else if (request->hasParam("recordType", true)) {
       requestedType = request->getParam("recordType", true)->value();
     }
-    const String type = normalizeAliyunRecordType(requestedType, configRecord.useIpv6);
+    const String type = normalizeAliyunRecordType(requestedType);
     String value = request->hasParam("value", true) ? request->getParam("value", true)->value() : "";
     value.trim();
     AliyunDdnsClient client;
-    client.begin(configRecord.username, configRecord.password, rootDomain, "@", type == "AAAA");
+    client.begin(configRecord.username, configRecord.password, rootDomain, "@");
     bool hasResolvedValue = !value.isEmpty();
     if (!hasResolvedValue) {
       String existingType;
@@ -1190,16 +1167,15 @@ void WebPortal::registerRoutes() {
       if (client.describeDomainRecordInfo(recordId, nullptr, &existingType, &existingValue)) {
         existingValue.trim();
         if (!existingValue.isEmpty() &&
-            normalizeAliyunRecordType(existingType, false) == type) {
+            normalizeAliyunRecordType(existingType) == type) {
           value = existingValue;
           hasResolvedValue = true;
         }
       }
     }
     if (!hasResolvedValue) {
-      if (!resolveAliyunRecordValue(&value, configRecord, type)) {
-        const String errorCode = type == "AAAA" ? String("ipv6_unavailable") : String("value_required");
-        request->send(400, "application/json", "{\"success\":false,\"error\":\"" + errorCode + "\"}");
+      if (!resolveAliyunRecordValue(&value, configRecord)) {
+        request->send(400, "application/json", "{\"success\":false,\"error\":\"value_required\"}");
         return;
       }
     }
@@ -1254,7 +1230,7 @@ void WebPortal::registerRoutes() {
     }
 
     AliyunDdnsClient client;
-    client.begin(configRecord.username, configRecord.password, rootDomain, "@", configRecord.useIpv6);
+    client.begin(configRecord.username, configRecord.password, rootDomain, "@");
     if (!client.deleteDomainRecord(recordId)) {
       const String errorMessage = buildAliyunApiError("delete_failed", client.getLastApiResponse());
       request->send(500,
