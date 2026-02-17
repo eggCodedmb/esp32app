@@ -71,7 +71,8 @@ void DdnsService::configureRuntimeRecord(RuntimeRecord* runtime) {
     runtime->config.username,
     runtime->config.password,
     rootDomain,
-    subDomain
+    subDomain,
+    runtime->config.useIpv6
   );
 }
 
@@ -235,7 +236,7 @@ void DdnsService::tick(bool wifiConnected)
       continue;
     }
 
-    const String observedIp = PublicIpService::resolve(record.config.useLocalIp);
+    const String observedIp = PublicIpService::resolve(record.config.useLocalIp, record.config.useIpv6);
     if (!observedIp.isEmpty())
     {
       record.lastNewIp = observedIp;
@@ -302,6 +303,7 @@ std::vector<DdnsRecordRuntimeStatus> DdnsService::getRecordStatuses() const
     status.username = runtime.config.username;
     status.updateIntervalSeconds = runtime.config.updateIntervalSeconds;
     status.useLocalIp = runtime.config.useLocalIp;
+    status.useIpv6 = runtime.config.useIpv6;
     status.state = runtime.state;
     status.message = runtime.message;
     status.lastOldIp = runtime.lastOldIp;
@@ -376,7 +378,7 @@ bool DdnsService::recordsEqual(const DdnsRecordConfig &lhs, const DdnsRecordConf
   return lhs.enabled == rhs.enabled && lhs.provider == rhs.provider && lhs.domain == rhs.domain &&
          lhs.username == rhs.username && lhs.password == rhs.password &&
          lhs.updateIntervalSeconds == rhs.updateIntervalSeconds &&
-         lhs.useLocalIp == rhs.useLocalIp;
+         lhs.useLocalIp == rhs.useLocalIp && lhs.useIpv6 == rhs.useIpv6;
 }
 
 bool DdnsService::configsEqual(const DdnsConfig &lhs, const DdnsConfig &rhs)

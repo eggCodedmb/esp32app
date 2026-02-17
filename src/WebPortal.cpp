@@ -3,7 +3,9 @@
 #include <cctype>
 #include <cstring>
 #include <cstdio>
+#include <vector>
 #include <ESP.h>
+#include "PublicIpService.h"
 
 namespace {
 constexpr const char* kProviderId = "aliyun";
@@ -11,6 +13,7 @@ constexpr uint16_t kDefaultStatusPollIntervalMinutes = 3;
 constexpr uint32_t kDefaultDdnsIntervalSeconds = 300;
 constexpr uint32_t kMinDdnsIntervalSeconds = 30;
 constexpr uint32_t kMaxDdnsIntervalSeconds = 86400;
+constexpr uint32_t kAliyunResolveTimeoutMs = 5000;
 
 bool normalizeMacAddress(const String& source, String* normalized) {
   if (normalized == nullptr) {
@@ -94,6 +97,420 @@ uint32_t normalizeDdnsIntervalSeconds(uint32_t value) {
   }
   return value;
 }
+
+bool isDdnsRecordConfiguredForAliyun(const DdnsRecordConfig& record) {
+  return !record.domain.isEmpty() && !record.username.isEmpty() && !record.password.isEmpty();
+}
+
+String normalizeAliyunRr(const String& rr) {
+  String normalized = rr;
+  normalized.trim();
+  if (normalized.isEmpty()) {
+    return "@";
+  }
+  return normalized;
+}
+
+String normalizeDdnsHostType(const String& hostType) {
+  String normalized = hostType;
+  normalized.trim();
+  normalized.toLowerCase();
+  if (normalized == "@") {
+    return "@";
+  }
+  if (normalized == "www") {
+    return "www";
+  }
+  return "www";
+}
+
+String normalizeDdnsRecordType(const String& type) {
+  String normalized = type;
+  normalized.trim();
+  normalized.toUpperCase();
+  if (normalized == "AAAA") {
+    return "AAAA";
+  }
+  return "A";
+}
+
+void splitDomainForAliyun(const String& fullDomain, String* rootDomain, String* rr = nullptr) {
+  if (rootDomain == nullptr) {
+    return;
+  }
+
+  String domain = fullDomain;
+  domain.trim();
+  if (domain.isEmpty()) {
+    *rootDomain = "";
+    if (rr != nullptr) {
+      *rr = "@";
+    }
+    return;
+  }
+
+  const int firstDotPos = domain.indexOf('.');
+  const int lastDotPos = domain.lastIndexOf('.');
+  if (firstDotPos == -1 || firstDotPos == lastDotPos) {
+    *rootDomain = domain;
+    if (rr != nullptr) {
+      *rr = "@";
+    }
+    return;
+  }
+
+  String resolvedRr = domain.substring(0, firstDotPos);
+  resolvedRr.trim();
+  if (resolvedRr.isEmpty()) {
+    resolvedRr = "@";
+  }
+  *rootDomain = domain.substring(firstDotPos + 1);
+  rootDomain->trim();
+  if (rr != nullptr) {
+    *rr = resolvedRr;
+  }
+}
+
+String buildAliyunFullDomain(const String& rootDomain, const String& rr) {
+  String normalizedRoot = rootDomain;
+  normalizedRoot.trim();
+  if (normalizedRoot.isEmpty()) {
+    return "";
+  }
+  const String normalizedRr = normalizeAliyunRr(rr);
+  return normalizedRr == "@" ? normalizedRoot : normalizedRr + "." + normalizedRoot;
+}
+
+String normalizeAliyunRecordType(const String& type, bool useIpv6Default) {
+  String normalized = type;
+  normalized.trim();
+  normalized.toUpperCase();
+  if (normalized == "A" || normalized == "AAAA") {
+    return normalized;
+  }
+  return useIpv6Default ? String("AAAA") : String("A");
+}
+
+String buildAliyunApiError(const String& errorCode, const String& apiResponse) {
+  if (!errorCode.isEmpty()) {
+    return errorCode;
+  }
+  if (!apiResponse.isEmpty()) {
+    return apiResponse;
+  }
+  return "aliyun_api_failed";
+}
+
+bool resolveAliyunRecordValue(String* value,
+                              const DdnsRecordConfig& configRecord,
+                              const String& recordType) {
+  if (value == nullptr) {
+    return false;
+  }
+  value->trim();
+  if (!value->isEmpty()) {
+    return true;
+  }
+
+  const bool useIpv6 = recordType == "AAAA";
+  *value = PublicIpService::resolve(configRecord.useLocalIp, useIpv6, kAliyunResolveTimeoutMs);
+  if (value->isEmpty() && useIpv6 && !configRecord.useLocalIp) {
+    // Retry with local IPv6 preference as fallback.
+    *value = PublicIpService::resolve(true, true, kAliyunResolveTimeoutMs);
+  }
+  value->trim();
+  return !value->isEmpty();
+}
+
+bool parseIndexParam(const String& rawValue, size_t* value) {
+  if (value == nullptr) {
+    return false;
+  }
+
+  String normalized = rawValue;
+  normalized.trim();
+  if (normalized.isEmpty()) {
+    return false;
+  }
+  for (size_t i = 0; i < normalized.length(); ++i) {
+    if (!std::isdigit(static_cast<unsigned char>(normalized.charAt(i)))) {
+      return false;
+    }
+  }
+
+  const int parsed = normalized.toInt();
+  if (parsed < 0) {
+    return false;
+  }
+
+  *value = static_cast<size_t>(parsed);
+  return true;
+}
+
+bool resolveAliyunRecordConfig(const DdnsConfig& ddnsConfig,
+                               size_t configIndex,
+                               DdnsRecordConfig* resolvedRecord,
+                               String* rootDomain) {
+  if (resolvedRecord == nullptr || rootDomain == nullptr) {
+    return false;
+  }
+  if (configIndex >= ddnsConfig.records.size()) {
+    return false;
+  }
+
+  const DdnsRecordConfig& source = ddnsConfig.records[configIndex];
+  if (!isDdnsRecordConfiguredForAliyun(source)) {
+    return false;
+  }
+
+  String resolvedRootDomain;
+  splitDomainForAliyun(source.domain, &resolvedRootDomain);
+  if (resolvedRootDomain.isEmpty()) {
+    return false;
+  }
+
+  *resolvedRecord = source;
+  *rootDomain = resolvedRootDomain;
+  return true;
+}
+
+bool parseBoolParam(const String& value, bool defaultValue) {
+  String normalized = value;
+  normalized.trim();
+  normalized.toLowerCase();
+
+  if (normalized == "1" || normalized == "true" || normalized == "on" || normalized == "yes") {
+    return true;
+  }
+  if (normalized == "0" || normalized == "false" || normalized == "off" || normalized == "no") {
+    return false;
+  }
+  return defaultValue;
+}
+
+bool resolveAliyunRequestConfig(AsyncWebServerRequest* request,
+                                const DdnsConfig& ddnsConfig,
+                                size_t configIndex,
+                                DdnsRecordConfig* resolvedRecord,
+                                String* rootDomain) {
+  if (request == nullptr || resolvedRecord == nullptr || rootDomain == nullptr) {
+    return false;
+  }
+
+  DdnsRecordConfig record;
+  String resolvedRootDomain;
+  const bool loadedFromStore =
+      resolveAliyunRecordConfig(ddnsConfig, configIndex, &record, &resolvedRootDomain);
+
+  bool hasInlineOverrides = false;
+  if (request->hasParam("username", true)) {
+    record.username = request->getParam("username", true)->value();
+    hasInlineOverrides = true;
+  }
+  if (request->hasParam("accessKeyId", true)) {
+    record.username = request->getParam("accessKeyId", true)->value();
+    hasInlineOverrides = true;
+  }
+  if (request->hasParam("password", true)) {
+    record.password = request->getParam("password", true)->value();
+    hasInlineOverrides = true;
+  }
+  if (request->hasParam("accessKeySecret", true)) {
+    record.password = request->getParam("accessKeySecret", true)->value();
+    hasInlineOverrides = true;
+  }
+  if (request->hasParam("rootDomain", true)) {
+    resolvedRootDomain = request->getParam("rootDomain", true)->value();
+    hasInlineOverrides = true;
+  }
+  if (request->hasParam("domainName", true)) {
+    resolvedRootDomain = request->getParam("domainName", true)->value();
+    hasInlineOverrides = true;
+  }
+  if (request->hasParam("useLocalIp", true)) {
+    record.useLocalIp = parseBoolParam(request->getParam("useLocalIp", true)->value(), false);
+    hasInlineOverrides = true;
+  }
+
+  record.username.trim();
+  record.password.trim();
+  resolvedRootDomain.trim();
+
+  if (!loadedFromStore && !hasInlineOverrides) {
+    return false;
+  }
+  if (record.username.isEmpty() || record.password.isEmpty() || resolvedRootDomain.isEmpty()) {
+    return false;
+  }
+
+  *resolvedRecord = record;
+  *rootDomain = resolvedRootDomain;
+  return true;
+}
+
+bool containsString(const std::vector<String>& values, const String& target) {
+  for (size_t index = 0; index < values.size(); ++index) {
+    if (values[index] == target) {
+      return true;
+    }
+  }
+  return false;
+}
+
+int findMatchingBracket(const String& source,
+                        int openIndex,
+                        char openBracket,
+                        char closeBracket) {
+  if (openIndex < 0 || openIndex >= source.length() ||
+      source.charAt(openIndex) != openBracket) {
+    return -1;
+  }
+
+  int depth = 0;
+  bool inString = false;
+  bool escaped = false;
+  for (int index = openIndex; index < source.length(); ++index) {
+    const char c = source.charAt(index);
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+      if (c == '\\') {
+        escaped = true;
+        continue;
+      }
+      if (c == '\"') {
+        inString = false;
+      }
+      continue;
+    }
+
+    if (c == '\"') {
+      inString = true;
+      continue;
+    }
+    if (c == openBracket) {
+      depth += 1;
+      continue;
+    }
+    if (c == closeBracket) {
+      depth -= 1;
+      if (depth == 0) {
+        return index;
+      }
+    }
+  }
+
+  return -1;
+}
+
+String extractAliyunRecordArray(const String& response) {
+  if (response.isEmpty()) {
+    return "[]";
+  }
+
+  const int domainRecordsPos = response.indexOf("\"DomainRecords\"");
+  if (domainRecordsPos < 0) {
+    return "[]";
+  }
+
+  const int recordKeyPos = response.indexOf("\"Record\"", domainRecordsPos);
+  if (recordKeyPos < 0) {
+    return "[]";
+  }
+
+  const int arrayStart = response.indexOf('[', recordKeyPos);
+  if (arrayStart < 0) {
+    return "[]";
+  }
+
+  const int arrayEnd = findMatchingBracket(response, arrayStart, '[', ']');
+  if (arrayEnd < 0) {
+    return "[]";
+  }
+
+  return response.substring(arrayStart, arrayEnd + 1);
+}
+
+void appendJsonArrayItems(const String& arrayJson, String* mergedItems) {
+  if (mergedItems == nullptr) {
+    return;
+  }
+
+  const int openPos = arrayJson.indexOf('[');
+  const int closePos = arrayJson.lastIndexOf(']');
+  if (openPos < 0 || closePos <= openPos) {
+    return;
+  }
+
+  String items = arrayJson.substring(openPos + 1, closePos);
+  items.trim();
+  if (items.isEmpty()) {
+    return;
+  }
+
+  if (!mergedItems->isEmpty()) {
+    *mergedItems += ",";
+  }
+  *mergedItems += items;
+}
+
+struct AliyunDdnsListResult {
+  bool success = false;
+  String recordsJson = "[]";
+  String responsesJson = "[]";
+};
+
+AliyunDdnsListResult fetchAliyunDdnsList(const DdnsConfig& ddnsConfig) {
+  AliyunDdnsListResult result;
+  std::vector<String> queriedKeys;
+  String mergedRecordItems;
+  String mergedResponses;
+
+  for (size_t index = 0; index < ddnsConfig.records.size(); ++index) {
+    const DdnsRecordConfig& record = ddnsConfig.records[index];
+    if (!isDdnsRecordConfiguredForAliyun(record)) {
+      continue;
+    }
+
+    String rootDomain;
+    splitDomainForAliyun(record.domain, &rootDomain);
+    if (rootDomain.isEmpty()) {
+      continue;
+    }
+
+    const String queryKey = record.username + "|" + record.password + "|" + rootDomain;
+    if (containsString(queriedKeys, queryKey)) {
+      continue;
+    }
+    queriedKeys.push_back(queryKey);
+
+    AliyunDdnsClient client;
+    client.begin(record.username, record.password, rootDomain, "@", record.useIpv6);
+    if (!client.describeDomainRecords(rootDomain)) {
+      continue;
+    }
+
+    const String response = client.getLastApiResponse();
+    if (response.isEmpty()) {
+      continue;
+    }
+
+    if (!mergedResponses.isEmpty()) {
+      mergedResponses += ",";
+    }
+    mergedResponses += response;
+
+    appendJsonArrayItems(extractAliyunRecordArray(response), &mergedRecordItems);
+    result.success = true;
+  }
+
+  result.recordsJson = "[" + mergedRecordItems + "]";
+  result.responsesJson = "[" + mergedResponses + "]";
+  return result;
+}
+
 }  // namespace
 
 WebPortal::WebPortal(uint16_t port,
@@ -192,6 +609,41 @@ void WebPortal::registerRoutes() {
     const PowerOnStatus power = _powerOnService.getStatus();
     const String otaCurrentVersion =
         systemConfig.otaInstalledVersionCode >= 0 ? String(systemConfig.otaInstalledVersionCode) : "-";
+    String ddnsConfigRecordsBody = "[";
+    for (size_t index = 0; index < ddnsConfig.records.size(); ++index) {
+      const DdnsRecordConfig& record = ddnsConfig.records[index];
+      String rootDomain;
+      String hostType;
+      splitDomainForAliyun(record.domain, &rootDomain, &hostType);
+      hostType = normalizeDdnsHostType(hostType);
+      if (rootDomain.isEmpty()) {
+        rootDomain = record.domain;
+      }
+      const String recordType = record.useIpv6 ? String("AAAA") : String("A");
+      ddnsConfigRecordsBody += "{";
+      ddnsConfigRecordsBody += "\"enabled\":" + String(record.enabled ? "true" : "false") + ",";
+      ddnsConfigRecordsBody += "\"provider\":\"" + jsonEscape(record.provider) + "\",";
+      ddnsConfigRecordsBody += "\"domain\":\"" + jsonEscape(record.domain) + "\",";
+      ddnsConfigRecordsBody += "\"rootDomain\":\"" + jsonEscape(rootDomain) + "\",";
+      ddnsConfigRecordsBody += "\"hostType\":\"" + jsonEscape(hostType) + "\",";
+      ddnsConfigRecordsBody += "\"recordType\":\"" + jsonEscape(recordType) + "\",";
+      ddnsConfigRecordsBody += "\"username\":\"" + jsonEscape(record.username) + "\",";
+      ddnsConfigRecordsBody += "\"password\":\"" + jsonEscape(record.password) + "\",";
+      ddnsConfigRecordsBody += "\"ttl\":" + String(record.updateIntervalSeconds) + ",";
+      ddnsConfigRecordsBody += "\"updateIntervalSeconds\":" + String(record.updateIntervalSeconds) + ",";
+      ddnsConfigRecordsBody += "\"useLocalIp\":" + String(record.useLocalIp ? "true" : "false") + ",";
+      ddnsConfigRecordsBody += "\"useIpv6\":" + String(record.useIpv6 ? "true" : "false");
+      ddnsConfigRecordsBody += "}";
+      if (index + 1 < ddnsConfig.records.size()) {
+        ddnsConfigRecordsBody += ",";
+      }
+    }
+    ddnsConfigRecordsBody += "]";
+
+    const AliyunDdnsListResult aliyunList = fetchAliyunDdnsList(ddnsConfig);
+    const bool aliyunListReady = aliyunList.success;
+    const String ddnsRecordsBody = aliyunListReady ? aliyunList.recordsJson : ddnsConfigRecordsBody;
+    const String ddnsRecordsSource = aliyunListReady ? "aliyun" : "config_fallback";
 
     String body = "{";
     body += "\"computerIp\":\"" + jsonEscape(config.ip) + "\",";
@@ -222,23 +674,10 @@ void WebPortal::registerRoutes() {
     body += "\"ddnsMessage\":\"" + jsonEscape(ddnsStatus.message) + "\",";
     body += "\"ddnsActiveRecordCount\":" + String(ddnsStatus.activeRecordCount) + ",";
     body += "\"ddnsTotalUpdateCount\":" + String(ddnsStatus.totalUpdateCount) + ",";
-    body += "\"ddnsRecords\":[";
-    for (size_t index = 0; index < ddnsConfig.records.size(); ++index) {
-      const DdnsRecordConfig& record = ddnsConfig.records[index];
-      body += "{";
-      body += "\"enabled\":" + String(record.enabled ? "true" : "false") + ",";
-      body += "\"provider\":\"" + jsonEscape(record.provider) + "\",";
-      body += "\"domain\":\"" + jsonEscape(record.domain) + "\",";
-      body += "\"username\":\"" + jsonEscape(record.username) + "\",";
-      body += "\"password\":\"" + jsonEscape(record.password) + "\",";
-      body += "\"updateIntervalSeconds\":" + String(record.updateIntervalSeconds) + ",";
-      body += "\"useLocalIp\":" + String(record.useLocalIp ? "true" : "false");
-      body += "}";
-      if (index + 1 < ddnsConfig.records.size()) {
-        body += ",";
-      }
-    }
-    body += "]";
+    body += "\"ddnsRecords\":" + ddnsRecordsBody + ",";
+    body += "\"ddnsConfigRecords\":" + ddnsConfigRecordsBody + ",";
+    body += "\"ddnsRecordsSource\":\"" + jsonEscape(ddnsRecordsSource) + "\",";
+    body += "\"ddnsAliyunDescribeResponses\":" + aliyunList.responsesJson;
     body += "}";
 
     request->send(200, "application/json", body);
@@ -339,10 +778,37 @@ void WebPortal::registerRoutes() {
           record.provider = normalizeDdnsProvider(request->getParam(key, true)->value());
         }
 
+        bool hasHostTypeParam = false;
+        String hostType = "www";
+        key = "ddns" + String(index) + "HostType";
+        if (request->hasParam(key, true)) {
+          hasHostTypeParam = true;
+          hostType = normalizeDdnsHostType(request->getParam(key, true)->value());
+        }
+
+        bool hasRootDomainParam = false;
+        String rootDomain = "";
+        key = "ddns" + String(index) + "RootDomain";
+        if (request->hasParam(key, true)) {
+          hasRootDomainParam = true;
+          rootDomain = request->getParam(key, true)->value();
+          rootDomain.trim();
+        }
+
+        String submittedDomain = "";
         key = "ddns" + String(index) + "Domain";
         if (request->hasParam(key, true)) {
-          record.domain = request->getParam(key, true)->value();
-          record.domain.trim();
+          submittedDomain = request->getParam(key, true)->value();
+          submittedDomain.trim();
+        }
+        if (rootDomain.isEmpty()) {
+          rootDomain = submittedDomain;
+        }
+        const bool useNewDomainFields = hasHostTypeParam || hasRootDomainParam;
+        if (useNewDomainFields) {
+          record.domain = buildAliyunFullDomain(rootDomain, hostType);
+        } else {
+          record.domain = submittedDomain;
         }
 
         key = "ddns" + String(index) + "Username";
@@ -355,6 +821,14 @@ void WebPortal::registerRoutes() {
         if (request->hasParam(key, true)) {
           record.password = request->getParam(key, true)->value();
           record.password.trim();
+        }
+
+        key = "ddns" + String(index) + "TTL";
+        if (request->hasParam(key, true)) {
+          const int parsedInterval = request->getParam(key, true)->value().toInt();
+          if (parsedInterval > 0) {
+            record.updateIntervalSeconds = static_cast<uint32_t>(parsedInterval);
+          }
         }
 
         key = "ddns" + String(index) + "IntervalSeconds";
@@ -370,6 +844,22 @@ void WebPortal::registerRoutes() {
         key = "ddns" + String(index) + "UseLocalIp";
         if (request->hasParam(key, true)) {
           record.useLocalIp = parseBoolValue(request->getParam(key, true)->value(), false);
+        }
+
+        bool hasRecordTypeParam = false;
+        String recordType = "A";
+        key = "ddns" + String(index) + "RecordType";
+        if (request->hasParam(key, true)) {
+          hasRecordTypeParam = true;
+          recordType = normalizeDdnsRecordType(request->getParam(key, true)->value());
+        }
+        if (hasRecordTypeParam) {
+          record.useIpv6 = recordType == "AAAA";
+        }
+
+        key = "ddns" + String(index) + "UseIpv6";
+        if (!hasRecordTypeParam && request->hasParam(key, true)) {
+          record.useIpv6 = parseBoolValue(request->getParam(key, true)->value(), false);
         }
 
         ddnsConfig.records.push_back(record);
@@ -507,14 +997,27 @@ void WebPortal::registerRoutes() {
     body += "\"records\":[";
     for (size_t index = 0; index < records.size(); ++index) {
       const DdnsRecordRuntimeStatus& record = records[index];
+      String rootDomain;
+      String hostType;
+      splitDomainForAliyun(record.domain, &rootDomain, &hostType);
+      hostType = normalizeDdnsHostType(hostType);
+      if (rootDomain.isEmpty()) {
+        rootDomain = record.domain;
+      }
+      const String recordType = record.useIpv6 ? String("AAAA") : String("A");
       body += "{";
       body += "\"enabled\":" + String(record.enabled ? "true" : "false") + ",";
       body += "\"configured\":" + String(record.configured ? "true" : "false") + ",";
       body += "\"provider\":\"" + jsonEscape(record.provider) + "\",";
       body += "\"domain\":\"" + jsonEscape(record.domain) + "\",";
+      body += "\"rootDomain\":\"" + jsonEscape(rootDomain) + "\",";
+      body += "\"hostType\":\"" + jsonEscape(hostType) + "\",";
+      body += "\"recordType\":\"" + jsonEscape(recordType) + "\",";
       body += "\"username\":\"" + jsonEscape(record.username) + "\",";
+      body += "\"ttl\":" + String(record.updateIntervalSeconds) + ",";
       body += "\"updateIntervalSeconds\":" + String(record.updateIntervalSeconds) + ",";
       body += "\"useLocalIp\":" + String(record.useLocalIp ? "true" : "false") + ",";
+      body += "\"useIpv6\":" + String(record.useIpv6 ? "true" : "false") + ",";
       body += "\"state\":\"" + jsonEscape(record.state) + "\",";
       body += "\"message\":\"" + jsonEscape(record.message) + "\",";
       body += "\"lastOldIp\":\"" + jsonEscape(record.lastOldIp) + "\",";
@@ -529,6 +1032,243 @@ void WebPortal::registerRoutes() {
     body += "]";
     body += "}";
 
+    request->send(200, "application/json", body);
+  });
+
+  _server.on("/api/ddns/aliyun/records", HTTP_GET, [this](AsyncWebServerRequest* request) {
+    if (!ensureAuthorized(request, true)) {
+      return;
+    }
+
+    if (!request->hasParam("configIndex")) {
+      request->send(400, "application/json", "{\"success\":false,\"error\":\"config_index_required\"}");
+      return;
+    }
+
+    size_t configIndex = 0;
+    if (!parseIndexParam(request->getParam("configIndex")->value(), &configIndex)) {
+      request->send(400, "application/json", "{\"success\":false,\"error\":\"invalid_config_index\"}");
+      return;
+    }
+
+    const DdnsConfig ddnsConfig = _configStore.loadDdnsConfig();
+    DdnsRecordConfig configRecord;
+    String rootDomain;
+    if (!resolveAliyunRequestConfig(request, ddnsConfig, configIndex, &configRecord, &rootDomain)) {
+      request->send(400, "application/json", "{\"success\":false,\"error\":\"ddns_record_incomplete\"}");
+      return;
+    }
+
+    AliyunDdnsClient client;
+    client.begin(configRecord.username, configRecord.password, rootDomain, "@", configRecord.useIpv6);
+    if (!client.describeDomainRecords(rootDomain)) {
+      const String errorMessage = buildAliyunApiError("describe_failed", client.getLastApiResponse());
+      request->send(500,
+                    "application/json",
+                    "{\"success\":false,\"error\":\"" + jsonEscape(errorMessage) + "\"}");
+      return;
+    }
+
+    const String response = client.getLastApiResponse();
+    String body = "{";
+    body += "\"success\":true,";
+    body += "\"configIndex\":" + String(configIndex) + ",";
+    body += "\"rootDomain\":\"" + jsonEscape(rootDomain) + "\",";
+    body += "\"records\":" + extractAliyunRecordArray(response);
+    body += "}";
+    request->send(200, "application/json", body);
+  });
+
+  _server.on("/api/ddns/aliyun/add", HTTP_POST, [this](AsyncWebServerRequest* request) {
+    if (!ensureAuthorized(request, true)) {
+      return;
+    }
+
+    if (!request->hasParam("configIndex", true)) {
+      request->send(400, "application/json", "{\"success\":false,\"error\":\"config_index_required\"}");
+      return;
+    }
+
+    size_t configIndex = 0;
+    if (!parseIndexParam(request->getParam("configIndex", true)->value(), &configIndex)) {
+      request->send(400, "application/json", "{\"success\":false,\"error\":\"invalid_config_index\"}");
+      return;
+    }
+
+    const DdnsConfig ddnsConfig = _configStore.loadDdnsConfig();
+    DdnsRecordConfig configRecord;
+    String rootDomain;
+    if (!resolveAliyunRequestConfig(request, ddnsConfig, configIndex, &configRecord, &rootDomain)) {
+      request->send(400, "application/json", "{\"success\":false,\"error\":\"ddns_record_incomplete\"}");
+      return;
+    }
+
+    const String rr = normalizeAliyunRr(
+        request->hasParam("rr", true) ? request->getParam("rr", true)->value() : "");
+    String requestedType = "";
+    if (request->hasParam("type", true)) {
+      requestedType = request->getParam("type", true)->value();
+    } else if (request->hasParam("recordType", true)) {
+      requestedType = request->getParam("recordType", true)->value();
+    }
+    const String type = normalizeAliyunRecordType(requestedType, configRecord.useIpv6);
+    String value = request->hasParam("value", true) ? request->getParam("value", true)->value() : "";
+    if (!resolveAliyunRecordValue(&value, configRecord, type)) {
+      const String errorCode = type == "AAAA" ? String("ipv6_unavailable") : String("value_required");
+      request->send(400, "application/json", "{\"success\":false,\"error\":\"" + errorCode + "\"}");
+      return;
+    }
+
+    AliyunDdnsClient client;
+    client.begin(configRecord.username, configRecord.password, rootDomain, "@", type == "AAAA");
+    if (!client.addDomainRecord(rootDomain, rr, type, value)) {
+      const String errorMessage = buildAliyunApiError("add_failed", client.getLastApiResponse());
+      request->send(500,
+                    "application/json",
+                    "{\"success\":false,\"error\":\"" + jsonEscape(errorMessage) + "\"}");
+      return;
+    }
+
+    String body = "{";
+    body += "\"success\":true,";
+    body += "\"configIndex\":" + String(configIndex) + ",";
+    body += "\"rootDomain\":\"" + jsonEscape(rootDomain) + "\",";
+    body += "\"recordId\":\"" + jsonEscape(client.getLastCreatedRecordId()) + "\"";
+    body += "}";
+    request->send(200, "application/json", body);
+  });
+
+  _server.on("/api/ddns/aliyun/update", HTTP_POST, [this](AsyncWebServerRequest* request) {
+    if (!ensureAuthorized(request, true)) {
+      return;
+    }
+
+    if (!request->hasParam("configIndex", true)) {
+      request->send(400, "application/json", "{\"success\":false,\"error\":\"config_index_required\"}");
+      return;
+    }
+
+    size_t configIndex = 0;
+    if (!parseIndexParam(request->getParam("configIndex", true)->value(), &configIndex)) {
+      request->send(400, "application/json", "{\"success\":false,\"error\":\"invalid_config_index\"}");
+      return;
+    }
+
+    const DdnsConfig ddnsConfig = _configStore.loadDdnsConfig();
+    DdnsRecordConfig configRecord;
+    String rootDomain;
+    if (!resolveAliyunRequestConfig(request, ddnsConfig, configIndex, &configRecord, &rootDomain)) {
+      request->send(400, "application/json", "{\"success\":false,\"error\":\"ddns_record_incomplete\"}");
+      return;
+    }
+
+    String recordId =
+        request->hasParam("recordId", true) ? request->getParam("recordId", true)->value() : "";
+    recordId.trim();
+    if (recordId.isEmpty()) {
+      request->send(400, "application/json", "{\"success\":false,\"error\":\"record_id_required\"}");
+      return;
+    }
+
+    const String rr = normalizeAliyunRr(
+        request->hasParam("rr", true) ? request->getParam("rr", true)->value() : "");
+    String requestedType = "";
+    if (request->hasParam("type", true)) {
+      requestedType = request->getParam("type", true)->value();
+    } else if (request->hasParam("recordType", true)) {
+      requestedType = request->getParam("recordType", true)->value();
+    }
+    const String type = normalizeAliyunRecordType(requestedType, configRecord.useIpv6);
+    String value = request->hasParam("value", true) ? request->getParam("value", true)->value() : "";
+    value.trim();
+    AliyunDdnsClient client;
+    client.begin(configRecord.username, configRecord.password, rootDomain, "@", type == "AAAA");
+    bool hasResolvedValue = !value.isEmpty();
+    if (!hasResolvedValue) {
+      String existingType;
+      String existingValue;
+      if (client.describeDomainRecordInfo(recordId, nullptr, &existingType, &existingValue)) {
+        existingValue.trim();
+        if (!existingValue.isEmpty() &&
+            normalizeAliyunRecordType(existingType, false) == type) {
+          value = existingValue;
+          hasResolvedValue = true;
+        }
+      }
+    }
+    if (!hasResolvedValue) {
+      if (!resolveAliyunRecordValue(&value, configRecord, type)) {
+        const String errorCode = type == "AAAA" ? String("ipv6_unavailable") : String("value_required");
+        request->send(400, "application/json", "{\"success\":false,\"error\":\"" + errorCode + "\"}");
+        return;
+      }
+    }
+
+    if (!client.updateDomainRecord(recordId, rr, type, value)) {
+      const String errorMessage = buildAliyunApiError("update_failed", client.getLastApiResponse());
+      request->send(500,
+                    "application/json",
+                    "{\"success\":false,\"error\":\"" + jsonEscape(errorMessage) + "\"}");
+      return;
+    }
+
+    String body = "{";
+    body += "\"success\":true,";
+    body += "\"configIndex\":" + String(configIndex) + ",";
+    body += "\"rootDomain\":\"" + jsonEscape(rootDomain) + "\",";
+    body += "\"recordId\":\"" + jsonEscape(recordId) + "\"";
+    body += "}";
+    request->send(200, "application/json", body);
+  });
+
+  _server.on("/api/ddns/aliyun/delete", HTTP_POST, [this](AsyncWebServerRequest* request) {
+    if (!ensureAuthorized(request, true)) {
+      return;
+    }
+
+    if (!request->hasParam("configIndex", true)) {
+      request->send(400, "application/json", "{\"success\":false,\"error\":\"config_index_required\"}");
+      return;
+    }
+
+    size_t configIndex = 0;
+    if (!parseIndexParam(request->getParam("configIndex", true)->value(), &configIndex)) {
+      request->send(400, "application/json", "{\"success\":false,\"error\":\"invalid_config_index\"}");
+      return;
+    }
+
+    const DdnsConfig ddnsConfig = _configStore.loadDdnsConfig();
+    DdnsRecordConfig configRecord;
+    String rootDomain;
+    if (!resolveAliyunRecordConfig(ddnsConfig, configIndex, &configRecord, &rootDomain)) {
+      request->send(400, "application/json", "{\"success\":false,\"error\":\"ddns_record_incomplete\"}");
+      return;
+    }
+
+    String recordId =
+        request->hasParam("recordId", true) ? request->getParam("recordId", true)->value() : "";
+    recordId.trim();
+    if (recordId.isEmpty()) {
+      request->send(400, "application/json", "{\"success\":false,\"error\":\"record_id_required\"}");
+      return;
+    }
+
+    AliyunDdnsClient client;
+    client.begin(configRecord.username, configRecord.password, rootDomain, "@", configRecord.useIpv6);
+    if (!client.deleteDomainRecord(recordId)) {
+      const String errorMessage = buildAliyunApiError("delete_failed", client.getLastApiResponse());
+      request->send(500,
+                    "application/json",
+                    "{\"success\":false,\"error\":\"" + jsonEscape(errorMessage) + "\"}");
+      return;
+    }
+
+    String body = "{";
+    body += "\"success\":true,";
+    body += "\"configIndex\":" + String(configIndex) + ",";
+    body += "\"rootDomain\":\"" + jsonEscape(rootDomain) + "\",";
+    body += "\"recordId\":\"" + jsonEscape(recordId) + "\"";
+    body += "}";
     request->send(200, "application/json", body);
   });
 

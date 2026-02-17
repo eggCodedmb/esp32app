@@ -130,6 +130,7 @@ void test_save_and_load_ddns_config_roundtrip() {
   record0.password = "";
   record0.updateIntervalSeconds = 300;
   record0.useLocalIp = false;
+  record0.useIpv6 = false;
   expected.records.push_back(record0);
 
   DdnsRecordConfig record1;
@@ -140,6 +141,7 @@ void test_save_and_load_ddns_config_roundtrip() {
   record1.password = "pass-demo";
   record1.updateIntervalSeconds = 120;
   record1.useLocalIp = true;
+  record1.useIpv6 = true;
   expected.records.push_back(record1);
 
   TEST_ASSERT_TRUE(store.saveDdnsConfig(expected));
@@ -155,6 +157,7 @@ void test_save_and_load_ddns_config_roundtrip() {
   TEST_ASSERT_EQUAL_STRING("", actual.records[0].password.c_str());
   TEST_ASSERT_EQUAL_UINT32(300, actual.records[0].updateIntervalSeconds);
   TEST_ASSERT_FALSE(actual.records[0].useLocalIp);
+  TEST_ASSERT_FALSE(actual.records[0].useIpv6);
 
   TEST_ASSERT_TRUE(actual.records[1].enabled);
   TEST_ASSERT_EQUAL_STRING("aliyun", actual.records[1].provider.c_str());
@@ -163,6 +166,7 @@ void test_save_and_load_ddns_config_roundtrip() {
   TEST_ASSERT_EQUAL_STRING("pass-demo", actual.records[1].password.c_str());
   TEST_ASSERT_EQUAL_UINT32(120, actual.records[1].updateIntervalSeconds);
   TEST_ASSERT_TRUE(actual.records[1].useLocalIp);
+  TEST_ASSERT_TRUE(actual.records[1].useIpv6);
 }
 
 void setup() {

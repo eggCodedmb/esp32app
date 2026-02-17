@@ -387,6 +387,7 @@ const char* WebPortal::dashboardPage() const {
     .ddns-record { border: 1px dashed var(--line); border-radius: 10px; background: var(--metric-bg); padding: 10px; }
     .ddns-record-header { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
     .ddns-record-title { font-size: 14px; font-weight: 600; }
+    .ddns-record.ddns-readonly { opacity: 0.68; }
     .power-config-grid { display: grid; grid-template-columns: minmax(0, 2fr) minmax(220px, 1fr); gap: 12px; }
     .power-config-card { border: 1px solid var(--line); border-radius: 10px; background: var(--metric-bg); padding: 12px; }
     .power-config-card h3 { margin: 0 0 10px; font-size: 15px; }
@@ -484,15 +485,13 @@ const char* WebPortal::dashboardPage() const {
           <label for="ddnsEnabled" style="margin: 0;">启用 DDNS</label>
         </div>
         <div class="inline-actions">
-          <button id="ddnsAddRecordButton" class="secondary" type="button">新增记录</button>
-          <button type="submit">保存 DDNS 配置</button>
+          <button id="ddnsAddRecordButton" class="secondary" type="button"><span class="icon"><i class="fa-solid fa-plus"></i></span></button>
         </div>
-        <div id="ddnsRecords" class="ddns-records"></div>
       </form>
+      <div id="ddnsRecords" class="ddns-records"></div>
       <p class="muted">状态：<strong id="ddnsState">-</strong>，活跃记录：<strong id="ddnsActiveCount">0</strong>，更新次数：<strong id="ddnsUpdateCount">0</strong></p>
       <p id="ddnsStatus" class="status"></p>
     </section>
-
     <section>
       <h2>WiFi 连接</h2>
       <div class="row">
@@ -842,26 +841,86 @@ const char* WebPortal::dashboardPage() const {
     }
 
     function normalizeDdnsRecord(record) {
+      const source = (record && typeof record === "object") ? record : {};
+      const parsedDomain = splitDdnsDomain(source.domain || "");
+      const rootDomain = String(source.rootDomain !== undefined ? source.rootDomain : parsedDomain.rootDomain).trim();
+      const hostType = normalizeDdnsHostType(
+          source.hostType !== undefined ? source.hostType : parsedDomain.hostType);
+      const recordType = normalizeDdnsRecordType(
+          source.recordType !== undefined ? source.recordType : (source.useIpv6 ? "AAAA" : "A"));
+      const ttl = normalizeDdnsIntervalSeconds(
+          source.ttl !== undefined ? source.ttl : source.updateIntervalSeconds);
+      const domain = buildDdnsFullDomain(rootDomain, hostType);
       return {
-        enabled: !!record.enabled,
-        provider: normalizeDdnsProvider(record.provider),
-        domain: String(record.domain || "").trim(),
-        username: String(record.username || "").trim(),
-        password: String(record.password || "").trim(),
-        updateIntervalSeconds: normalizeDdnsIntervalSeconds(record.updateIntervalSeconds),
-        useLocalIp: !!record.useLocalIp
+        enabled: source.enabled === undefined ? true : !!source.enabled,
+        provider: normalizeDdnsProvider(source.provider),
+        domain: domain,
+        rootDomain: rootDomain,
+        hostType: hostType,
+        recordType: recordType,
+        username: String(source.username || "").trim(),
+        password: String(source.password || "").trim(),
+        ttl: ttl,
+        updateIntervalSeconds: ttl,
+        useLocalIp: !!source.useLocalIp,
+        useIpv6: recordType === "AAAA",
+        value: String(source.value || "").trim(),
+        recordId: String(source.recordId || "").trim(),
+        editing: !!source.editing,
+        isNew: !!source.isNew
       };
+    }
+
+    function normalizeDdnsHostType(value) {
+      const normalized = String(value || "").trim();
+      if (normalized === "@") {
+        return "@";
+      }
+      return "www";
+    }
+
+    function normalizeDdnsRecordType(value) {
+      return String(value || "").trim().toUpperCase() === "AAAA" ? "AAAA" : "A";
+    }
+
+    function normalizeAliyunRecord(record) {
+      const source = (record && typeof record === "object") ? record : {};
+      const rr = normalizeAliyunRr(source.RR || source.rr || "@");
+      const domainName = String(source.DomainName || source.domainName || "").trim();
+      let fullDomain = String(source.fullDomain || source.domain || "").trim();
+      if (!fullDomain && domainName) {
+        fullDomain = rr !== "@" ? (rr + "." + domainName) : domainName;
+      }
+      return Object.assign({}, source, {
+        recordId: String(source.RecordId || source.recordId || "").trim(),
+        rr: rr,
+        domainName: domainName,
+        fullDomain: fullDomain,
+        type: normalizeDdnsRecordType(source.Type || source.type || "A"),
+        value: String(source.Value || source.value || "").trim(),
+        status: String(source.Status || source.status || "").trim(),
+        line: String(source.Line || source.line || "").trim(),
+        ttl: source.TTL !== undefined ? String(source.TTL) : String(source.ttl || "")
+      });
     }
 
     function createDefaultDdnsRecord() {
       return {
         enabled: true,
         provider: "aliyun",
-        domain: "",
+        rootDomain: "",
+        hostType: "www",
+        recordType: "A",
         username: "",
         password: "",
+        ttl: 300,
         updateIntervalSeconds: 300,
-        useLocalIp: false
+        useLocalIp: false,
+        useIpv6: false,
+        value: "",
+        recordId: "",
+        editing: true,
+        isNew: true
       };
     }
 
@@ -874,31 +933,237 @@ const char* WebPortal::dashboardPage() const {
           .join("");
     }
 
+    function splitDdnsDomain(fullDomain) {
+      const normalized = String(fullDomain || "").trim();
+      if (!normalized) {
+        return { rootDomain: "", hostType: "www", fullDomain: "" };
+      }
+      const firstDotPos = normalized.indexOf(".");
+      const lastDotPos = normalized.lastIndexOf(".");
+      if (firstDotPos < 0 || firstDotPos === lastDotPos) {
+        return { rootDomain: normalized, hostType: "@", fullDomain: normalized };
+      }
+      const hostType = normalizeDdnsHostType(normalized.slice(0, firstDotPos));
+      const rootDomain = String(normalized.slice(firstDotPos + 1) || "").trim();
+      return { rootDomain: rootDomain, hostType: hostType, fullDomain: buildDdnsFullDomain(rootDomain, hostType) };
+    }
+
+    function normalizeAliyunRr(value) {
+      const rr = String(value || "").trim();
+      return rr || "@";
+    }
+
+    function buildDdnsFullDomain(rootDomain, hostType) {
+      const root = String(rootDomain || "").trim();
+      if (!root) {
+        return "";
+      }
+      const normalizedHostType = normalizeDdnsHostType(hostType);
+      return normalizedHostType === "@" ? root : (normalizedHostType + "." + root);
+    }
+
+    function ddnsHostTypeOptions(selectedHostType) {
+      const normalized = normalizeDdnsHostType(selectedHostType);
+      return "<option value=\"www\"" + (normalized === "www" ? " selected" : "") + ">www</option>" +
+             "<option value=\"@\"" + (normalized === "@" ? " selected" : "") + ">@</option>";
+    }
+
+    function ddnsTypeOptions(selectedType) {
+      const normalized = normalizeDdnsRecordType(selectedType);
+      return "<option value=\"A\"" + (normalized === "A" ? " selected" : "") + ">A</option>" +
+             "<option value=\"AAAA\"" + (normalized === "AAAA" ? " selected" : "") + ">AAAA</option>";
+    }
+
+    function updateDdnsCardPreview(card) {
+      if (!card) {
+        return;
+      }
+      const rootDomainInput = card.querySelector(".ddns-root-domain");
+      const hostTypeSelect = card.querySelector(".ddns-host-type");
+      const rootDomain = rootDomainInput ? rootDomainInput.value : "";
+      const hostType = hostTypeSelect ? hostTypeSelect.value : "www";
+      const fullDomain = buildDdnsFullDomain(rootDomain, hostType);
+      const labelElement = card.querySelector(".ddns-domain-label");
+      const previewElement = card.querySelector(".ddns-domain-preview");
+      if (labelElement) {
+        labelElement.textContent = normalizeDdnsHostType(hostType);
+      }
+      if (previewElement) {
+        previewElement.textContent = fullDomain || "-";
+      }
+    }
+
     function collectDdnsRecordsFromForm() {
       const cards = Array.from(document.querySelectorAll("#ddnsRecords .ddns-record"));
-      return cards.map(function (card) {
+      return cards.map(function (card, index) {
         const enabledElement = card.querySelector(".ddns-enabled");
         const providerElement = card.querySelector(".ddns-provider");
-        const domainElement = card.querySelector(".ddns-domain");
+        const rootDomainElement = card.querySelector(".ddns-root-domain");
+        const hostTypeElement = card.querySelector(".ddns-host-type");
+        const recordTypeElement = card.querySelector(".ddns-record-type");
         const usernameElement = card.querySelector(".ddns-username");
         const passwordElement = card.querySelector(".ddns-password");
-        const intervalElement = card.querySelector(".ddns-interval");
+        const ttlElement = card.querySelector(".ddns-ttl");
         const localIpElement = card.querySelector(".ddns-local-ip");
-        return normalizeDdnsRecord({
-          enabled: enabledElement ? !!enabledElement.checked : false,
+        const valueElement = card.querySelector(".ddns-value");
+        const current = ddnsRecordsCache[index] && typeof ddnsRecordsCache[index] === "object"
+            ? ddnsRecordsCache[index]
+            : {};
+        const normalized = normalizeDdnsRecord({
+          enabled: enabledElement ? !!enabledElement.checked : true,
           provider: providerElement ? providerElement.value : "aliyun",
-          domain: domainElement ? domainElement.value : "",
+          rootDomain: rootDomainElement ? rootDomainElement.value : "",
+          hostType: hostTypeElement ? hostTypeElement.value : "www",
+          recordType: recordTypeElement ? recordTypeElement.value : "A",
           username: usernameElement ? usernameElement.value : "",
           password: passwordElement ? passwordElement.value : "",
-          updateIntervalSeconds: intervalElement ? intervalElement.value : 300,
-          useLocalIp: localIpElement ? !!localIpElement.checked : false
+          ttl: ttlElement ? ttlElement.value : 300,
+          useLocalIp: localIpElement ? !!localIpElement.checked : false,
+          value: valueElement ? valueElement.value : "",
+          recordId: current.recordId,
+          isNew: !!current.isNew,
+          editing: card.classList.contains("ddns-editing")
         });
+        return Object.assign({}, current, normalized);
       });
     }
 
-    function renderDdnsRecords(records) {
-      ddnsRecordsCache =
+    function buildDdnsConfigParams(records) {
+      const params = new URLSearchParams();
+      params.set("ddnsEnabled", document.getElementById("ddnsEnabled").checked ? "1" : "0");
+      params.set("ddnsRecordCount", String(records.length));
+      records.forEach(function (record, index) {
+        const normalized = normalizeDdnsRecord(record);
+        params.set("ddns" + String(index) + "Enabled", normalized.enabled ? "1" : "0");
+        params.set("ddns" + String(index) + "Provider", normalizeDdnsProvider(normalized.provider));
+        params.set("ddns" + String(index) + "Domain", normalized.rootDomain || "");
+        params.set("ddns" + String(index) + "RootDomain", normalized.rootDomain || "");
+        params.set("ddns" + String(index) + "HostType", normalizeDdnsHostType(normalized.hostType));
+        params.set("ddns" + String(index) + "RecordType", normalizeDdnsRecordType(normalized.recordType));
+        params.set("ddns" + String(index) + "Username", normalized.username || "");
+        params.set("ddns" + String(index) + "Password", normalized.password || "");
+        params.set("ddns" + String(index) + "TTL", String(normalizeDdnsIntervalSeconds(normalized.ttl)));
+        params.set("ddns" + String(index) + "UseLocalIp", normalized.useLocalIp ? "1" : "0");
+      });
+      return params;
+    }
+
+    async function persistDdnsConfigRecords(records) {
+      const normalizedRecords =
           (Array.isArray(records) ? records : []).slice(0, maxDdnsRecords).map(normalizeDdnsRecord);
+      const params = buildDdnsConfigParams(normalizedRecords);
+      await api("/api/config", {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: params.toString()
+      });
+      ddnsRecordsCache = normalizedRecords;
+    }
+
+    function findAliyunRecordMatch(records, hostType, recordType) {
+      const normalizedHostType = normalizeAliyunRr(hostType);
+      const normalizedRecordType = normalizeDdnsRecordType(recordType);
+      return (Array.isArray(records) ? records : []).find(function (record) {
+        return normalizeAliyunRr(record.rr) === normalizedHostType &&
+               normalizeDdnsRecordType(record.type) === normalizedRecordType;
+      }) || null;
+    }
+
+    async function fetchAliyunRecordsByConfigIndex(configIndex) {
+      const data = await api("/api/ddns/aliyun/records?configIndex=" + encodeURIComponent(String(configIndex)));
+      return Array.isArray(data.records) ? data.records.map(normalizeAliyunRecord) : [];
+    }
+
+    async function refreshDdnsRecordSnapshots() {
+      const sourceRecords = ddnsRecordsCache.map(normalizeDdnsRecord);
+      const enriched = await Promise.all(sourceRecords.map(async function (record, index) {
+        if (!record.rootDomain || !record.username || !record.password) {
+          return record;
+        }
+        try {
+          const aliyunRecords = await fetchAliyunRecordsByConfigIndex(index);
+          const matched = findAliyunRecordMatch(aliyunRecords, record.hostType, record.recordType);
+          if (!matched) {
+            return record;
+          }
+          return Object.assign({}, record, {
+            value: String(matched.value || record.value || "").trim(),
+            recordId: String(matched.recordId || record.recordId || "").trim()
+          });
+        } catch (_) {
+          return record;
+        }
+      }));
+
+      ddnsRecordsCache = enriched.map(function (record, index) {
+        const source = sourceRecords[index] || {};
+        return Object.assign({}, source, record, {
+          editing: !!source.editing,
+          isNew: !!source.isNew
+        });
+      });
+      renderDdnsRecords(ddnsRecordsCache);
+    }
+
+    async function addDdnsRecordToAliyun(configIndex, record) {
+      const params = new URLSearchParams();
+      params.set("configIndex", String(configIndex));
+      params.set("rr", normalizeAliyunRr(record.hostType));
+      params.set("type", normalizeDdnsRecordType(record.recordType));
+      params.set("value", String(record.value || "").trim());
+      params.set("username", String(record.username || "").trim());
+      params.set("password", String(record.password || "").trim());
+      params.set("rootDomain", String(record.rootDomain || "").trim());
+      params.set("useLocalIp", record.useLocalIp ? "1" : "0");
+      const data = await api("/api/ddns/aliyun/add", {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: params.toString()
+      });
+      return String(data.recordId || "").trim();
+    }
+
+    async function updateDdnsRecordOnAliyun(configIndex, recordId, record) {
+      const params = new URLSearchParams();
+      params.set("configIndex", String(configIndex));
+      params.set("recordId", String(recordId || "").trim());
+      params.set("rr", normalizeAliyunRr(record.hostType));
+      params.set("type", normalizeDdnsRecordType(record.recordType));
+      params.set("value", String(record.value || "").trim());
+      params.set("username", String(record.username || "").trim());
+      params.set("password", String(record.password || "").trim());
+      params.set("rootDomain", String(record.rootDomain || "").trim());
+      params.set("useLocalIp", record.useLocalIp ? "1" : "0");
+      await api("/api/ddns/aliyun/update", {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: params.toString()
+      });
+    }
+
+    async function deleteDdnsRecordFromAliyun(configIndex, recordId) {
+      const params = new URLSearchParams();
+      params.set("configIndex", String(configIndex));
+      params.set("recordId", String(recordId || "").trim());
+      await api("/api/ddns/aliyun/delete", {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: params.toString()
+      });
+    }
+
+    function validateDdnsRecordForAliyun(record) {
+      if (!record.rootDomain) {
+        return "DDNS root domain is required.";
+      }
+      if (!record.username || !record.password) {
+        return "Aliyun AccessKey is required.";
+      }
+      return "";
+    }
+
+    function renderDdnsRecords(records) {
+      ddnsRecordsCache = (Array.isArray(records) ? records : []).slice(0, maxDdnsRecords).map(normalizeDdnsRecord);
 
       const container = document.getElementById("ddnsRecords");
       if (!container) {
@@ -906,56 +1171,196 @@ const char* WebPortal::dashboardPage() const {
       }
 
       if (ddnsRecordsCache.length === 0) {
-        container.innerHTML = "<p class=\"muted\">暂无 DDNS 记录，点击“新增记录”开始配置。</p>";
+        container.innerHTML = "<p class=\"muted\">暂无 DDNS 配置记录，点击“新增配置”开始。</p>";
         applyBulmaClasses(container);
         return;
       }
 
       container.innerHTML = ddnsRecordsCache
                                 .map(function (record, index) {
+                                  const fullDomain = buildDdnsFullDomain(record.rootDomain, record.hostType);
+                                  const readonly = !record.editing;
+                                  const disabledAttr = readonly ? " disabled" : "";
+                                  const actionIcon = record.isNew ? "fa-save" : "fa-pen-to-square";
+                                  const cardClass = "ddns-record" + (readonly ? " ddns-readonly" : " ddns-editing");
                                   return (
-                                      "<div class=\"ddns-record\" data-index=\"" + index + "\">" +
+                                      "<div class=\"" + cardClass + "\" data-index=\"" + String(index) + "\">" +
                                       "<div class=\"ddns-record-header\">" +
-                                      "<span class=\"ddns-record-title\">记录 #" + (index + 1) + "</span>" +
-                                      "<button class=\"button is-warning ddns-remove-button\" type=\"button\" data-index=\"" + index + "\"><span class=\"icon\"><i class=\"fa-solid fa-trash-can\"></i></span></button>" +
+                                      "<span class=\"ddns-record-title\">配置 #" + String(index + 1) + "</span>" +
+                                      "<div class=\"inline-actions\">" +
+                                      "<button class=\"button is-light ddns-action-button\" type=\"button\" data-index=\"" + String(index) + "\"><span class=\"icon\"><i class=\"fa-solid " + actionIcon + "\"></i></span></button>" +
+                                      "<button class=\"button is-warning ddns-remove-button\" type=\"button\" data-index=\"" + String(index) + "\"><span class=\"icon\"><i class=\"fa-solid fa-trash-can\"></i></span></button>" +
+                                      "</div>" +
                                       "</div>" +
                                       "<div class=\"inline-check\">" +
-                                      "<input class=\"ddns-enabled\" type=\"checkbox\"" + (record.enabled ? " checked" : "") + ">" +
-                                      "<label style=\"margin:0;\">启用此记录</label>" +
+                                      "<input class=\"ddns-enabled\" type=\"checkbox\"" + (record.enabled ? " checked" : "") + disabledAttr + ">" +
+                                      "<label style=\"margin:0;\">启用此 DDNS 任务</label>" +
                                       "</div>" +
-                                       "<div class=\"row\">" +
-                                       "<div><label>服务商</label><select class=\"ddns-provider\">" + ddnsProviderOptions(record.provider) + "</select></div>" +
-                                       "<div><label>域名/主机</label><input class=\"ddns-domain\" autocomplete=\"off\" value=\"" + escapeHtml(record.domain) + "\" placeholder=\"example.ddns.net\"></div>" +
-                                       "<div><label>用户名/AccessKeyID/Token</label><input class=\"ddns-username\" autocomplete=\"off\" value=\"" + escapeHtml(record.username) + "\"></div>" +
-                                       "<div><label>密码/AccessKeySecret/Key</label><input class=\"ddns-password\" type=\"password\" autocomplete=\"off\" value=\"" + escapeHtml(record.password) + "\"></div>" +
-                                       "<div><label>更新间隔(秒)</label><input class=\"ddns-interval\" type=\"number\" min=\"30\" max=\"86400\" value=\"" + String(record.updateIntervalSeconds) + "\"></div>" +
-                                       "</div>" +
+                                      "<div class=\"row\">" +
+                                      "<div><label>服务商</label><select class=\"ddns-provider\"" + disabledAttr + ">" + ddnsProviderOptions(record.provider) + "</select></div>" +
+                                      "<div><label>主域名</label><input class=\"ddns-root-domain\" autocomplete=\"off\" value=\"" + escapeHtml(record.rootDomain) + "\" placeholder=\"example.com\"" + disabledAttr + "></div>" +
+                                      "<div><label>主机类型</label><select class=\"ddns-host-type\"" + disabledAttr + ">" + ddnsHostTypeOptions(record.hostType) + "</select></div>" +
+                                      "<div><label>记录类型</label><select class=\"ddns-record-type\"" + disabledAttr + ">" + ddnsTypeOptions(record.recordType) + "</select></div>" +
+                                      "<div><label>AccessKey ID</label><input class=\"ddns-username\" autocomplete=\"off\" value=\"" + escapeHtml(record.username) + "\"" + disabledAttr + "></div>" +
+                                      "<div><label>AccessKey Secret</label><input class=\"ddns-password\" type=\"password\" autocomplete=\"off\" value=\"" + escapeHtml(record.password) + "\"" + disabledAttr + "></div>" +
+                                      "<div><label>TTL</label><input class=\"ddns-ttl\" type=\"number\" min=\"30\" max=\"86400\" value=\"" + String(record.ttl) + "\"" + disabledAttr + "></div>" +
+                                      "<div><label>解析值(IP)</label><input class=\"ddns-value\" autocomplete=\"off\" value=\"" + escapeHtml(record.value) + "\"" + disabledAttr + "></div>" +
+                                      "</div>" +
                                       "<div class=\"inline-check\">" +
-                                      "<input class=\"ddns-local-ip\" type=\"checkbox\"" + (record.useLocalIp ? " checked" : "") + ">" +
-                                      "<label style=\"margin:0;\">使用局域网 IP（仅内网解析场景）</label>" +
+                                      "<input class=\"ddns-local-ip\" type=\"checkbox\"" + (record.useLocalIp ? " checked" : "") + disabledAttr + ">" +
+                                      "<label style=\"margin:0;\">使用局域网 IP（仅内网）</label>" +
                                       "</div>" +
-                                      "<p class=\"muted\">运行状态：<span class=\"ddns-record-state\">-</span>；最新 IP：<span class=\"ddns-record-ip\">-</span></p>" +
+                                      "<p class=\"muted\">Label Preview: <span class=\"ddns-domain-label\">" + escapeHtml(record.hostType) + "</span>, Full Domain: <span class=\"ddns-domain-preview\">" + escapeHtml(fullDomain || "-") + "</span></p>" +
+                                      "<p class=\"muted\">RecordId: " + escapeHtml(record.recordId || "-") + ", Runtime: <span class=\"ddns-record-state\">-</span>, Last IP: <span class=\"ddns-record-ip\">-</span></p>" +
                                       "</div>");
                                 })
                                 .join("");
       applyBulmaClasses(container);
 
-      Array.from(container.querySelectorAll(".ddns-remove-button")).forEach(function (button) {
-        button.addEventListener("click", function () {
+      Array.from(container.querySelectorAll(".ddns-root-domain, .ddns-host-type")).forEach(function (input) {
+        input.addEventListener("input", function () {
+          const card = this.closest(".ddns-record");
+          updateDdnsCardPreview(card);
+        });
+        input.addEventListener("change", function () {
+          const card = this.closest(".ddns-record");
+          updateDdnsCardPreview(card);
+        });
+      });
+
+      Array.from(container.querySelectorAll(".ddns-action-button")).forEach(function (button) {
+        button.addEventListener("click", async function () {
           const index = Number(this.dataset.index);
-          const currentRecords = collectDdnsRecordsFromForm();
-          if (Number.isFinite(index) && index >= 0 && index < currentRecords.length) {
-            currentRecords.splice(index, 1);
-            renderDdnsRecords(currentRecords);
+          if (!Number.isFinite(index) || index < 0) {
+            return;
+          }
+          this.disabled = true;
+          try {
+            await handleDdnsRecordAction(index);
+          } catch (error) {
+            setText("ddnsStatus", toMessage(error.message));
+          } finally {
+            this.disabled = false;
+          }
+        });
+      });
+
+      Array.from(container.querySelectorAll(".ddns-remove-button")).forEach(function (button) {
+        button.addEventListener("click", async function () {
+          const index = Number(this.dataset.index);
+          if (!Number.isFinite(index) || index < 0) {
+            return;
+          }
+          this.disabled = true;
+          try {
+            await handleDdnsRecordDelete(index);
+          } catch (error) {
+            setText("ddnsStatus", toMessage(error.message));
+          } finally {
+            this.disabled = false;
           }
         });
       });
     }
 
+    async function handleDdnsRecordAction(index) {
+      const records = collectDdnsRecordsFromForm();
+      if (index < 0 || index >= records.length) {
+        return;
+      }
+
+      const currentRecord = normalizeDdnsRecord(records[index]);
+      if (!currentRecord.editing && !currentRecord.isNew) {
+        records[index] = Object.assign({}, currentRecord, { editing: true });
+        renderDdnsRecords(records);
+        setText("ddnsStatus", "DDNS record editing enabled.");
+        return;
+      }
+
+      const validationError = validateDdnsRecordForAliyun(currentRecord);
+      if (validationError) {
+        setText("ddnsStatus", validationError);
+        return;
+      }
+
+      let recordId = String(currentRecord.recordId || "").trim();
+      if (currentRecord.isNew) {
+        recordId = await addDdnsRecordToAliyun(index, currentRecord);
+        setText("ddnsStatus", "Aliyun record added.");
+      } else {
+        if (!recordId) {
+          const aliyunRecords = await fetchAliyunRecordsByConfigIndex(index);
+          const matched = findAliyunRecordMatch(aliyunRecords, currentRecord.hostType, currentRecord.recordType);
+          recordId = matched ? String(matched.recordId || "").trim() : "";
+        }
+        if (recordId) {
+          await updateDdnsRecordOnAliyun(index, recordId, currentRecord);
+          setText("ddnsStatus", "Aliyun record updated.");
+        } else {
+          recordId = await addDdnsRecordToAliyun(index, currentRecord);
+          setText("ddnsStatus", "Aliyun record added.");
+        }
+      }
+
+      const savedRecord = Object.assign({}, currentRecord, {
+        recordId: recordId,
+        isNew: false,
+        editing: false
+      });
+      records[index] = savedRecord;
+
+      try {
+        await persistDdnsConfigRecords(records);
+      } catch (error) {
+        records[index] = Object.assign({}, savedRecord, { editing: true });
+        ddnsRecordsCache = records.map(normalizeDdnsRecord);
+        renderDdnsRecords(ddnsRecordsCache);
+        setText("ddnsStatus", "Aliyun success, local save failed: " + toMessage(error.message));
+        return;
+      }
+
+      ddnsRecordsCache = records.map(normalizeDdnsRecord);
+      renderDdnsRecords(ddnsRecordsCache);
+      await refreshDdnsStatus();
+    }
+
+    async function handleDdnsRecordDelete(index) {
+      const records = collectDdnsRecordsFromForm();
+      if (index < 0 || index >= records.length) {
+        return;
+      }
+
+      const currentRecord = normalizeDdnsRecord(records[index]);
+      const fullDomain = buildDdnsFullDomain(currentRecord.rootDomain, currentRecord.hostType);
+      if (!window.confirm("确认删除 DDNS 配置 " + (fullDomain || ("#" + String(index + 1))) + " 吗？")) {
+        return;
+      }
+
+      if (!currentRecord.isNew) {
+        let recordId = String(currentRecord.recordId || "").trim();
+        if (!recordId) {
+          try {
+            const aliyunRecords = await fetchAliyunRecordsByConfigIndex(index);
+            const matched = findAliyunRecordMatch(aliyunRecords, currentRecord.hostType, currentRecord.recordType);
+            recordId = matched ? String(matched.recordId || "").trim() : "";
+          } catch (_) {}
+        }
+        if (recordId) {
+          await deleteDdnsRecordFromAliyun(index, recordId);
+        }
+      }
+
+      records.splice(index, 1);
+      await persistDdnsConfigRecords(records);
+      renderDdnsRecords(ddnsRecordsCache);
+      await refreshDdnsStatus();
+      setText("ddnsStatus", "DDNS record removed.");
+    }
+
     function addDdnsRecord() {
       const currentRecords = collectDdnsRecordsFromForm();
       if (currentRecords.length >= maxDdnsRecords) {
-        setText("ddnsStatus", "最多支持 5 条 DDNS 记录。");
+        setText("ddnsStatus", "Max 5 DDNS records are supported.");
         return;
       }
       currentRecords.push(createDefaultDdnsRecord());
@@ -963,6 +1368,14 @@ const char* WebPortal::dashboardPage() const {
       setText("ddnsStatus", "");
     }
 
+    async function saveDdnsEnabled() {
+      try {
+        await persistDdnsConfigRecords(collectDdnsRecordsFromForm());
+        await refreshDdnsStatus();
+      } catch (error) {
+        setText("ddnsStatus", toMessage(error.message));
+      }
+    }
     function ddnsStateLabel(state) {
       if (state === "DISABLED") return "已禁用";
       if (state === "WAIT_CONFIG") return "待配置";
@@ -1031,6 +1444,15 @@ const char* WebPortal::dashboardPage() const {
       if (code === "password_not_changed") return "新密码不能与当前密码相同。";
       if (code === "persist_failed") return "保存失败，请稍后重试。";
       if (code === "unauthorized") return "登录已失效，请重新登录。";
+      if (code === "config_index_required") return "缺少账号索引，请先选择账号。";
+      if (code === "invalid_config_index") return "账号索引无效，请刷新页面后重试。";
+      if (code === "ddns_record_incomplete") return "DDNS 配置不完整，请先补全域名和密钥并保存。";
+      if (code === "record_id_required") return "缺少 RecordId。";
+      if (code === "value_required") return "解析值不能为空。";
+      if (code === "describe_failed") return "拉取阿里云记录失败，请检查网络和凭据。";
+      if (code === "add_failed") return "新增阿里云记录失败。";
+      if (code === "update_failed") return "修改阿里云记录失败。";
+      if (code === "delete_failed") return "删除阿里云记录失败。";
       if (code === "ssid_required") return "SSID 不能为空。";
       if (code === "wifi_not_connected") return "WiFi 未连接，无法执行该操作。";
       if (code === "config_mac_required") return "请先配置目标电脑 MAC 地址。";
@@ -1397,7 +1819,13 @@ const char* WebPortal::dashboardPage() const {
       document.getElementById("bemfaHost").value = data.bemfaHost || "bemfa.com";
       document.getElementById("bemfaPort").value = data.bemfaPort || 9501;
       document.getElementById("ddnsEnabled").checked = !!data.ddnsEnabled;
-      renderDdnsRecords(Array.isArray(data.ddnsRecords) ? data.ddnsRecords : []);
+      const configRecords = Array.isArray(data.ddnsConfigRecords)
+          ? data.ddnsConfigRecords
+          : (Array.isArray(data.ddnsRecords) ? data.ddnsRecords : []);
+      renderDdnsRecords(configRecords.map(function (record) {
+        return Object.assign({}, record, { isNew: false, editing: false });
+      }));
+      await refreshDdnsRecordSnapshots();
       setText("otaCurrentVersion", data.otaCurrentVersion || "-");
 
       updatePowerStatus(data);
@@ -1608,41 +2036,6 @@ const char* WebPortal::dashboardPage() const {
         setText("bemfaStatus", toMessage(error.message));
       }
     }
-
-    async function saveDdnsConfig(event) {
-      event.preventDefault();
-
-      const records = collectDdnsRecordsFromForm().slice(0, maxDdnsRecords);
-      const params = new URLSearchParams();
-      params.set("ddnsEnabled", document.getElementById("ddnsEnabled").checked ? "1" : "0");
-      params.set("ddnsRecordCount", String(records.length));
-
-      records.forEach(function (record, index) {
-        params.set("ddns" + String(index) + "Enabled", record.enabled ? "1" : "0");
-        params.set("ddns" + String(index) + "Provider", normalizeDdnsProvider(record.provider));
-        params.set("ddns" + String(index) + "Domain", record.domain || "");
-        params.set("ddns" + String(index) + "Username", record.username || "");
-        params.set("ddns" + String(index) + "Password", record.password || "");
-        params.set(
-            "ddns" + String(index) + "IntervalSeconds",
-            String(normalizeDdnsIntervalSeconds(record.updateIntervalSeconds)));
-        params.set("ddns" + String(index) + "UseLocalIp", record.useLocalIp ? "1" : "0");
-      });
-
-      try {
-        await api("/api/config", {
-          method: "POST",
-          headers: { "Content-Type": "application/x-www-form-urlencoded" },
-          body: params.toString()
-        });
-        await loadConfig();
-        await refreshDdnsStatus();
-        setText("ddnsStatus", "DDNS 配置已保存。");
-      } catch (error) {
-        setText("ddnsStatus", toMessage(error.message));
-      }
-    }
-
     async function saveSystemConfig(event) {
       event.preventDefault();
       const params = new URLSearchParams();
@@ -1708,8 +2101,9 @@ const char* WebPortal::dashboardPage() const {
     document.getElementById("otaUpgradeButton").addEventListener("click", triggerManualOtaUpgrade);
     document.getElementById("configForm").addEventListener("submit", saveConfig);
     document.getElementById("bemfaForm").addEventListener("submit", saveBemfaConfig);
+    document.getElementById("ddnsForm").addEventListener("submit", function (event) { event.preventDefault(); });
     document.getElementById("ddnsAddRecordButton").addEventListener("click", addDdnsRecord);
-    document.getElementById("ddnsForm").addEventListener("submit", saveDdnsConfig);
+    document.getElementById("ddnsEnabled").addEventListener("change", saveDdnsEnabled);
     document.getElementById("systemForm").addEventListener("submit", saveSystemConfig);
     document.getElementById("refreshAllButton").addEventListener("click", refreshAllStatusByButton);
     document.getElementById("passwordForm").addEventListener("submit", savePassword);

@@ -36,6 +36,7 @@ struct DdnsRecordConfig {
   String password = "";
   uint32_t updateIntervalSeconds = 300;
   bool useLocalIp = false;
+  bool useIpv6 = false;
 };
 
 struct DdnsConfig {

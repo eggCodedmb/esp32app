@@ -14,6 +14,7 @@ struct DdnsRecordRuntimeStatus {
   String username = "";
   uint32_t updateIntervalSeconds = 300;
   bool useLocalIp = false;
+  bool useIpv6 = false;
   String state = "IDLE";
   String message = "";
   String lastOldIp = "";

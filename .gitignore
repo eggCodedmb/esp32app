@@ -4,3 +4,9 @@
 .vscode/launch.json
 .vscode/ipch
 .env
+webportal_dashboard_copy.html
+webportal_login_copy.html
+WebPortalPages_copy.html
+WebPortalPages_offline_preview.html
+__pycache__/test_aliyun.cpython-311.pyc
+test_aliyun.py

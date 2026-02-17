@@ -6,6 +6,8 @@
 
 namespace {
 constexpr const char* kAuthNamespace = "esp32auth";
+constexpr const char* kSessionTokenKey = "sess_tok";
+constexpr const char* kSessionExpiryUnixKey = "sess_exp_unix";
 
 void clearAuthNamespace() {
   Preferences preferences;
@@ -66,10 +68,42 @@ void test_update_password_persists_for_new_instance() {
 
 void test_issue_session_token_has_expected_length() {
   AuthService auth("admin", "admin123");
+  auth.begin();
   const String token = auth.issueSessionToken();
   TEST_ASSERT_EQUAL_UINT32(32, token.length());
   TEST_ASSERT_TRUE(auth.sessionTtlSeconds() > 0);
   TEST_ASSERT_FALSE(auth.isAuthorized(nullptr));
+
+  Preferences preferences;
+  const bool opened = preferences.begin(kAuthNamespace, true);
+  TEST_ASSERT_TRUE(opened);
+  if (opened) {
+    const String storedToken = preferences.getString(kSessionTokenKey, "");
+    TEST_ASSERT_EQUAL_STRING(token.c_str(), storedToken.c_str());
+
+    const uint32_t storedExpiryUnix = preferences.getULong(kSessionExpiryUnixKey, 0);
+    TEST_ASSERT_TRUE(storedExpiryUnix == 0 || storedExpiryUnix > 1700000000UL);
+    preferences.end();
+  }
+}
+
+void test_clear_session_removes_persisted_token() {
+  AuthService auth("admin", "admin123");
+  auth.begin();
+  auth.issueSessionToken();
+  auth.clearSession();
+
+  Preferences preferences;
+  const bool opened = preferences.begin(kAuthNamespace, true);
+  TEST_ASSERT_TRUE(opened);
+  if (opened) {
+    const String storedToken = preferences.getString(kSessionTokenKey, "");
+    TEST_ASSERT_EQUAL_STRING("", storedToken.c_str());
+
+    const uint32_t storedExpiryUnix = preferences.getULong(kSessionExpiryUnixKey, 0);
+    TEST_ASSERT_EQUAL_UINT32(0, storedExpiryUnix);
+    preferences.end();
+  }
 }
 
 void setup() {
@@ -81,6 +115,7 @@ void setup() {
   RUN_TEST(test_update_password_rejects_invalid_inputs);
   RUN_TEST(test_update_password_persists_for_new_instance);
   RUN_TEST(test_issue_session_token_has_expected_length);
+  RUN_TEST(test_clear_session_removes_persisted_token);
   UNITY_END();
 }
 

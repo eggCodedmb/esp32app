@@ -81,6 +81,12 @@ void test_dashboard_page_contains_config_and_password_sections() {
   TEST_ASSERT_TRUE(page.indexOf("ddnsEnabled") >= 0);
   TEST_ASSERT_TRUE(page.indexOf("ddnsAddRecordButton") >= 0);
   TEST_ASSERT_TRUE(page.indexOf("ddnsRecords") >= 0);
+  TEST_ASSERT_TRUE(page.indexOf("ddns-host-type") >= 0);
+  TEST_ASSERT_TRUE(page.indexOf("ddns-record-type") >= 0);
+  TEST_ASSERT_TRUE(page.indexOf("ddns-ttl") >= 0);
+  TEST_ASSERT_TRUE(page.indexOf("ddnsAliyunAccount") < 0);
+  TEST_ASSERT_TRUE(page.indexOf("ddnsAliyunRecords") < 0);
+  TEST_ASSERT_TRUE(page.indexOf("ddns-ipv6") < 0);
   TEST_ASSERT_TRUE(page.indexOf("otaCheckButton") >= 0);
   TEST_ASSERT_TRUE(page.indexOf("otaUpgradeButton") >= 0);
   TEST_ASSERT_TRUE(page.indexOf("otaProgress") >= 0);

@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include <Arduino.h>
 #include <functional>
@@ -14,15 +14,34 @@ class AliyunDdnsClient {
   void begin(const String& accessKeyId,
              const String& accessKeySecret,
              const String& domain,
-             const String& subDomain = "@");
+             const String& subDomain = "@",
+             bool useIpv6 = false);
 
   void update(uint32_t now, bool useLocalIp);
   void onUpdate(UpdateCallback callback);
+
+  // Aliyun DNS API (required parameters only)
+  bool describeDomainRecords(const String& domainName);
+  bool describeDomainRecordInfo(const String& recordId,
+                                String* rr,
+                                String* type,
+                                String* value);
+  bool addDomainRecord(const String& domainName,
+                       const String& rr,
+                       const String& type,
+                       const String& value);
+  bool updateDomainRecord(const String& recordId,
+                          const String& rr,
+                          const String& type,
+                          const String& value);
+  bool deleteDomainRecord(const String& recordId);
 
   uint32_t getUpdateCount() const { return _updateCount; }
   uint32_t getLastUpdateAt() const { return _lastUpdateAtMs; }
   const String& getLastOldIp() const { return _lastOldIp; }
   const String& getLastNewIp() const { return _lastNewIp; }
+  const String& getLastApiResponse() const { return _lastApiResponse; }
+  const String& getLastCreatedRecordId() const { return _lastCreatedRecordId; }
 
  private:
   struct RecordInfo {
@@ -36,6 +55,12 @@ class AliyunDdnsClient {
   String calculateSignature(const String& method, const String& sortedParams) const;
   String sha1Hmac(const String& key, const String& data) const;
   String base64Encode(const uint8_t* data, size_t length) const;
+  const char* recordType() const;
+  String buildCommonParams(const String& action) const;
+  String buildSignedParams(const String& method, const String& rawParams) const;
+  bool sendSignedRequest(const String& method, const String& signedParams, String* response) const;
+  bool invokeApi(const String& method, const String& rawParams, String* response) const;
+  bool parseJsonStringField(const String& response, const char* key, String* value) const;
 
   bool fetchRecordInfo(RecordInfo* info);
   bool updateRecord(const String& recordId, const String& newIp);
@@ -52,7 +77,10 @@ class AliyunDdnsClient {
   uint32_t _lastUpdateAtMs = 0;
   String _lastOldIp;
   String _lastNewIp;
+  String _lastApiResponse;
+  String _lastCreatedRecordId;
 
   bool _begun = false;
   bool _recordIdValid = false;
+  bool _useIpv6 = false;
 };
