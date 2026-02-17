@@ -1276,7 +1276,7 @@ const char* WebPortal::dashboardPage() const {
                                       "<input class=\"ddns-local-ip\" type=\"checkbox\"" + (record.useLocalIp ? " checked" : "") + disabledAttr + ">" +
                                       "<label style=\"margin:0;\">使用局域网 IP（仅内网）</label>" +
                                       "</div>" +
-                                      "<p class=\"muted\">主机类型 <span class=\"ddns-domain-label\">" + escapeHtml(record.hostType) + "</span>, 完整域名: <span class=\"ddns-domain-preview\">" + escapeHtml(fullDomain || "-") + "</span></p>" +
+                                      "<p class=\"muted\">主机类型： <span class=\"ddns-domain-label\">" + escapeHtml(record.hostType) + "</span>, 完整域名: <span class=\"ddns-domain-preview\">" + escapeHtml(fullDomain || "-") + "</span></p>" +
                                       "<p class=\"muted\">RecordId: " + escapeHtml(record.recordId || "-") + ", Runtime: <span class=\"ddns-record-state\">-</span>, Last IP: <span class=\"ddns-record-ip\">-</span></p>" +
                                       "</div>" +
                                       "</div>");
