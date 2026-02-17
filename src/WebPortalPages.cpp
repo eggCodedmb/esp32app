@@ -388,6 +388,10 @@ const char* WebPortal::dashboardPage() const {
     .ddns-record-header { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
     .ddns-record-title { font-size: 14px; font-weight: 600; }
     .ddns-record.ddns-readonly { opacity: 0.68; }
+    .ddns-record-summary { display: none; margin-top: 8px; }
+    .ddns-record-details { margin-top: 8px; }
+    .ddns-record.ddns-collapsed .ddns-record-summary { display: block; }
+    .ddns-record.ddns-collapsed .ddns-record-details { display: none; }
     .power-config-grid { display: grid; grid-template-columns: minmax(0, 2fr) minmax(220px, 1fr); gap: 12px; }
     .power-config-card { border: 1px solid var(--line); border-radius: 10px; background: var(--metric-bg); padding: 12px; }
     .power-config-card h3 { margin: 0 0 10px; font-size: 15px; }
@@ -486,6 +490,7 @@ const char* WebPortal::dashboardPage() const {
         </div>
         <div class="inline-actions">
           <button id="ddnsAddRecordButton" class="secondary" type="button"><span class="icon"><i class="fa-solid fa-plus"></i></span></button>
+          <button id="ddnsToggleAllButton" class="secondary" type="button">Collapse All</button>
         </div>
       </form>
       <div id="ddnsRecords" class="ddns-records"></div>
@@ -866,7 +871,8 @@ const char* WebPortal::dashboardPage() const {
         value: String(source.value || "").trim(),
         recordId: String(source.recordId || "").trim(),
         editing: !!source.editing,
-        isNew: !!source.isNew
+        isNew: !!source.isNew,
+        collapsed: !!source.collapsed
       };
     }
 
@@ -919,7 +925,8 @@ const char* WebPortal::dashboardPage() const {
         value: "",
         recordId: "",
         editing: true,
-        isNew: true
+        isNew: true,
+        collapsed: false
       };
     }
 
@@ -1020,7 +1027,8 @@ const char* WebPortal::dashboardPage() const {
           value: valueElement ? valueElement.value : "",
           recordId: current.recordId,
           isNew: !!current.isNew,
-          editing: card.classList.contains("ddns-editing")
+          editing: card.classList.contains("ddns-editing"),
+          collapsed: card.classList.contains("ddns-collapsed")
         });
         return Object.assign({}, current, normalized);
       });
@@ -1160,6 +1168,58 @@ const char* WebPortal::dashboardPage() const {
       return "";
     }
 
+    function updateDdnsToggleAllButton() {
+      const button = document.getElementById("ddnsToggleAllButton");
+      if (!button) {
+        return;
+      }
+
+      if (ddnsRecordsCache.length === 0) {
+        button.disabled = true;
+        button.textContent = "全部折叠";
+        return;
+      }
+
+      const allCollapsed = ddnsRecordsCache.every(function (record) {
+        return !!record.collapsed;
+      });
+      button.disabled = false;
+      button.textContent = allCollapsed ? "展开全部" : "全部折叠";
+    }
+
+    function setAllDdnsRecordsCollapsed(collapsed) {
+      const records = collectDdnsRecordsFromForm().map(normalizeDdnsRecord);
+      if (records.length === 0) {
+        updateDdnsToggleAllButton();
+        return;
+      }
+
+      renderDdnsRecords(records.map(function (record) {
+        return Object.assign({}, record, { collapsed: !!collapsed });
+      }));
+    }
+
+    function toggleAllDdnsRecords() {
+      const records = collectDdnsRecordsFromForm().map(normalizeDdnsRecord);
+      if (records.length === 0) {
+        updateDdnsToggleAllButton();
+        return;
+      }
+
+      const shouldCollapse = records.some(function (record) { return !record.collapsed; });
+      setAllDdnsRecordsCollapsed(shouldCollapse);
+    }
+
+    function toggleDdnsRecordCollapsed(index) {
+      const records = collectDdnsRecordsFromForm().map(normalizeDdnsRecord);
+      if (index < 0 || index >= records.length) {
+        return;
+      }
+
+      records[index] = Object.assign({}, records[index], { collapsed: !records[index].collapsed });
+      renderDdnsRecords(records);
+    }
+
     function renderDdnsRecords(records) {
       ddnsRecordsCache = (Array.isArray(records) ? records : []).slice(0, maxDdnsRecords).map(normalizeDdnsRecord);
 
@@ -1171,6 +1231,7 @@ const char* WebPortal::dashboardPage() const {
       if (ddnsRecordsCache.length === 0) {
         container.innerHTML = "<p class=\"muted\">暂无 DDNS 配置记录，点击“新增配置”开始。</p>";
         applyBulmaClasses(container);
+        updateDdnsToggleAllButton();
         return;
       }
 
@@ -1178,18 +1239,25 @@ const char* WebPortal::dashboardPage() const {
                                 .map(function (record, index) {
                                   const fullDomain = buildDdnsFullDomain(record.rootDomain, record.hostType);
                                   const readonly = !record.editing;
+                                  const collapsed = !!record.collapsed;
                                   const disabledAttr = readonly ? " disabled" : "";
                                   const actionIcon = record.isNew ? "fa-save" : "fa-pen-to-square";
-                                  const cardClass = "ddns-record" + (readonly ? " ddns-readonly" : " ddns-editing");
+                                  const collapseLabel = collapsed ? "展开" : "折叠";
+                                  const cardClass = "ddns-record" +
+                                      (readonly ? " ddns-readonly" : " ddns-editing") +
+                                      (collapsed ? " ddns-collapsed" : "");
                                   return (
                                       "<div class=\"" + cardClass + "\" data-index=\"" + String(index) + "\">" +
                                       "<div class=\"ddns-record-header\">" +
                                       "<span class=\"ddns-record-title\">配置 #" + String(index + 1) + "</span>" +
                                       "<div class=\"inline-actions\">" +
+                                      "<button class=\"button is-light ddns-collapse-toggle\" type=\"button\" data-index=\"" + String(index) + "\">" + collapseLabel + "</button>" +
                                       "<button class=\"button is-light ddns-action-button\" type=\"button\" data-index=\"" + String(index) + "\"><span class=\"icon\"><i class=\"fa-solid " + actionIcon + "\"></i></span></button>" +
                                       "<button class=\"button is-warning ddns-remove-button\" type=\"button\" data-index=\"" + String(index) + "\"><span class=\"icon\"><i class=\"fa-solid fa-trash-can\"></i></span></button>" +
                                       "</div>" +
                                       "</div>" +
+                                      "<p class=\"muted ddns-record-summary\">域名： " + escapeHtml(fullDomain || "-") + ", IP: " + escapeHtml(record.value || "-") + ", 记录ID: " + escapeHtml(record.recordId || "-") + "</p>" +
+                                      "<div class=\"ddns-record-details\">" +
                                       "<div class=\"inline-check\">" +
                                       "<input class=\"ddns-enabled\" type=\"checkbox\"" + (record.enabled ? " checked" : "") + disabledAttr + ">" +
                                       "<label style=\"margin:0;\">启用此 DDNS 任务</label>" +
@@ -1210,10 +1278,12 @@ const char* WebPortal::dashboardPage() const {
                                       "</div>" +
                                       "<p class=\"muted\">Label Preview: <span class=\"ddns-domain-label\">" + escapeHtml(record.hostType) + "</span>, Full Domain: <span class=\"ddns-domain-preview\">" + escapeHtml(fullDomain || "-") + "</span></p>" +
                                       "<p class=\"muted\">RecordId: " + escapeHtml(record.recordId || "-") + ", Runtime: <span class=\"ddns-record-state\">-</span>, Last IP: <span class=\"ddns-record-ip\">-</span></p>" +
+                                      "</div>" +
                                       "</div>");
                                 })
                                 .join("");
       applyBulmaClasses(container);
+      updateDdnsToggleAllButton();
 
       Array.from(container.querySelectorAll(".ddns-root-domain, .ddns-host-type")).forEach(function (input) {
         input.addEventListener("input", function () {
@@ -1223,6 +1293,16 @@ const char* WebPortal::dashboardPage() const {
         input.addEventListener("change", function () {
           const card = this.closest(".ddns-record");
           updateDdnsCardPreview(card);
+        });
+      });
+
+      Array.from(container.querySelectorAll(".ddns-collapse-toggle")).forEach(function (button) {
+        button.addEventListener("click", function () {
+          const index = Number(this.dataset.index);
+          if (!Number.isFinite(index) || index < 0) {
+            return;
+          }
+          toggleDdnsRecordCollapsed(index);
         });
       });
 
@@ -1821,7 +1901,7 @@ const char* WebPortal::dashboardPage() const {
           ? data.ddnsConfigRecords
           : (Array.isArray(data.ddnsRecords) ? data.ddnsRecords : []);
       renderDdnsRecords(configRecords.map(function (record) {
-        return Object.assign({}, record, { isNew: false, editing: false });
+        return Object.assign({}, record, { isNew: false, editing: false, collapsed: true });
       }));
       await refreshDdnsRecordSnapshots();
       setText("otaCurrentVersion", data.otaCurrentVersion || "-");
@@ -2101,6 +2181,7 @@ const char* WebPortal::dashboardPage() const {
     document.getElementById("bemfaForm").addEventListener("submit", saveBemfaConfig);
     document.getElementById("ddnsForm").addEventListener("submit", function (event) { event.preventDefault(); });
     document.getElementById("ddnsAddRecordButton").addEventListener("click", addDdnsRecord);
+    document.getElementById("ddnsToggleAllButton").addEventListener("click", toggleAllDdnsRecords);
     document.getElementById("ddnsEnabled").addEventListener("change", saveDdnsEnabled);
     document.getElementById("systemForm").addEventListener("submit", saveSystemConfig);
     document.getElementById("refreshAllButton").addEventListener("click", refreshAllStatusByButton);
