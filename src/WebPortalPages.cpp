@@ -574,7 +574,7 @@ const char* WebPortal::dashboardPage() const {
       <p class="muted">目标版本：<span id="otaTargetVersion" class="code">-</span></p>
       <div class="inline-actions">
         <button id="otaCheckButton" class="secondary" type="button">检测新版本</button>
-        <button id="otaUpgradeButton" type="button" hidden>升级固件</button>
+        <button id="otaUpgradeButton" type="button" style="display:none;">升级固件</button>
       </div>
       <p id="otaStatus" class="status"></p>
     </section>
@@ -1721,7 +1721,7 @@ const char* WebPortal::dashboardPage() const {
       checkButton.disabled = busy;
       checkButton.textContent = busy ? "处理中..." : "手动检测新版本";
 
-       upgradeButton.hidden = !updateAvailable;
+       upgradeButton.style.display = updateAvailable ? "" : "none";
        upgradeButton.disabled = busy;
        upgradeButton.textContent = busy ? "升级中..." : "升级固件";
 
@@ -1959,6 +1959,12 @@ const char* WebPortal::dashboardPage() const {
         const data = await api("/api/ota/status");
         updateOtaStatus(data);
       } catch (error) {
+        const upgradeButton = document.getElementById("otaUpgradeButton");
+        if (upgradeButton) {
+          upgradeButton.style.display = "none";
+          upgradeButton.disabled = false;
+          upgradeButton.textContent = "升级固件";
+        }
         setText("otaStatus", toMessage(error.message));
       }
     }
@@ -2193,6 +2199,10 @@ const char* WebPortal::dashboardPage() const {
       applyBulmaClasses();
       updateScanButtonState();
       renderDdnsRecords([]);
+      const otaUpgradeButton = document.getElementById("otaUpgradeButton");
+      if (otaUpgradeButton) {
+        otaUpgradeButton.style.display = "none";
+      }
       try {
         await loadConfig();
       } catch (error) {
