@@ -78,7 +78,7 @@ C:\Users\25547\.platformio\penv\Scripts\platformio.exe device monitor -b 115200
 
 ## 页面访问
 1. 连接 ESP32 热点 `ESP32-Setup`
-2. 浏览器打开 `http://192.168.4.1`
+2. 浏览器打开 `http://192.168.4.1:8080`
 3. 登录后执行 WiFi、配置与远程开机操作
 
 ## 主要接口

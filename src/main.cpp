@@ -26,7 +26,7 @@ BemfaService bemfaService;
 DdnsService ddnsService(configStore);
 TimeService timeService;
 FirmwareUpgradeService firmwareUpgradeService;
-WebPortal webPortal(80,
+WebPortal webPortal(8080,
                     authService,
                     wifiService,
                     configStore,
