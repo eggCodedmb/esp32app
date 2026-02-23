@@ -18,9 +18,14 @@ void ensureStationEnabled() {
     WiFi.mode(WIFI_STA);
   }
 }
+
+bool isTerminalConnectionFailureStatus(wl_status_t status) {
+  return status == WL_NO_SSID_AVAIL || status == WL_CONNECT_FAILED;
+}
 }  // namespace
 
 WifiScanResult WifiService::scanNetworks() {
+  tick();
   ensureStationEnabled();
 
   const uint32_t previousScanAtMs = _lastScanAtMs;
@@ -147,6 +152,26 @@ std::vector<WifiNetworkInfo> WifiService::collectScanResults(int count) const {
 }
 
 bool WifiService::connectTo(const String& ssid, const String& password, uint32_t timeoutMs) {
+  if (!startConnect(ssid, password, timeoutMs)) {
+    return false;
+  }
+
+  if (isConnected()) {
+    return true;
+  }
+
+  while (_connectInProgress) {
+    tick();
+    if (!_connectInProgress) {
+      break;
+    }
+    delay(250);
+  }
+
+  return isConnected();
+}
+
+bool WifiService::startConnect(const String& ssid, const String& password, uint32_t timeoutMs) {
   String normalizedSsid = ssid;
   normalizedSsid.trim();
   if (normalizedSsid.isEmpty()) {
@@ -154,23 +179,66 @@ bool WifiService::connectTo(const String& ssid, const String& password, uint32_t
     return false;
   }
 
-  ensureStationEnabled();
-  WiFi.begin(normalizedSsid.c_str(), password.c_str());
-
-  const uint32_t startTime = millis();
-  while (WiFi.status() != WL_CONNECTED && (millis() - startTime) < timeoutMs) {
-    delay(250);
+  if (_connectInProgress) {
+    _lastMessage = "WiFi connection is already in progress.";
+    return false;
   }
 
-  if (WiFi.status() == WL_CONNECTED) {
-    const bool persisted = persistCredentials(normalizedSsid, password);
-    _lastMessage = persisted ? ("Connected to " + normalizedSsid + ".")
-                             : ("Connected to " + normalizedSsid + ", but failed to save credentials.");
+  if (isConnected() && currentSsid() == normalizedSsid) {
+    _lastMessage = "Already connected to " + normalizedSsid + ".";
     return true;
   }
 
-  _lastMessage = "WiFi connection failed or timed out.";
-  return false;
+  ensureStationEnabled();
+
+  // Reset previous STA attempt before starting a new target connection.
+  WiFi.disconnect(false, false);
+  WiFi.begin(normalizedSsid.c_str(), password.c_str());
+
+  _connectInProgress = true;
+  _connectStartedAtMs = millis();
+  _connectTimeoutMs = timeoutMs;
+  _connectTargetSsid = normalizedSsid;
+  _connectTargetPassword = password;
+  _lastMessage = "Connecting to " + normalizedSsid + "...";
+  return true;
+}
+
+void WifiService::tick() {
+  if (!_connectInProgress) {
+    return;
+  }
+
+  const wl_status_t status = WiFi.status();
+  if (status == WL_CONNECTED) {
+    const bool persisted = persistCredentials(_connectTargetSsid, _connectTargetPassword);
+    _lastMessage = persisted ? ("Connected to " + _connectTargetSsid + ".")
+                             : ("Connected to " + _connectTargetSsid +
+                                ", but failed to save credentials.");
+    _connectInProgress = false;
+    _connectTargetPassword = "";
+    return;
+  }
+
+  const bool timedOut = (millis() - _connectStartedAtMs) >= _connectTimeoutMs;
+  if (!timedOut && !isTerminalConnectionFailureStatus(status)) {
+    return;
+  }
+
+  WiFi.disconnect(false, false);
+  if (status == WL_NO_SSID_AVAIL) {
+    _lastMessage = "WiFi SSID not found: " + _connectTargetSsid;
+  } else if (status == WL_CONNECT_FAILED) {
+    _lastMessage = "WiFi authentication failed for SSID: " + _connectTargetSsid;
+  } else {
+    _lastMessage = "WiFi connection failed or timed out.";
+  }
+  _connectInProgress = false;
+  _connectTargetPassword = "";
+}
+
+bool WifiService::isConnecting() const {
+  return _connectInProgress;
 }
 
 bool WifiService::reconnectFromStored(uint32_t timeoutMs) {

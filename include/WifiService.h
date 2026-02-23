@@ -19,10 +19,13 @@ struct WifiScanResult {
 class WifiService {
  public:
   WifiScanResult scanNetworks();
+  bool startConnect(const String& ssid, const String& password, uint32_t timeoutMs = 15000);
   bool connectTo(const String& ssid, const String& password, uint32_t timeoutMs = 15000);
   bool reconnectFromStored(uint32_t timeoutMs = 15000);
+  void tick();
 
   bool isConnected() const;
+  bool isConnecting() const;
   String currentSsid() const;
   String ipAddress() const;
   String lastMessage() const;
@@ -43,7 +46,12 @@ class WifiService {
   std::vector<WifiNetworkInfo> _cachedNetworks;
   uint32_t _lastScanAtMs = 0;
   uint32_t _scanStartedAtMs = 0;
+  uint32_t _connectStartedAtMs = 0;
+  uint32_t _connectTimeoutMs = 0;
   bool _hasScanCache = false;
   bool _scanInProgress = false;
+  bool _connectInProgress = false;
+  String _connectTargetSsid;
+  String _connectTargetPassword;
   String _lastMessage = "Not connected.";
 };

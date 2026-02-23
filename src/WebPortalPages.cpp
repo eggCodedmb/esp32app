@@ -2067,7 +2067,33 @@ const char* WebPortal::dashboardPage() const {
       }
     }
 
+    function waitMs(durationMs) {
+      return new Promise(function (resolve) {
+        setTimeout(resolve, durationMs);
+      });
+    }
+
+    function formatWifiConnectMessage(data, fallbackMessage) {
+      const message = (data && data.message) ? data.message : fallbackMessage;
+      const ip = (data && data.ip) ? ("，IP：" + data.ip) : "";
+      return message + ip;
+    }
+
+    async function waitForWifiConnectResult(timeoutMs) {
+      const deadline = Date.now() + timeoutMs;
+      while (Date.now() < deadline) {
+        await waitMs(1000);
+        const status = await api("/api/wifi/status");
+        if (status.connected || !status.connecting) {
+          return status;
+        }
+      }
+      return { connected: false, connecting: false, message: "WiFi connection timed out." };
+    }
+
     async function connectWifi() {
+      const connectButton = document.getElementById("connectButton");
+      connectButton.disabled = true;
       const params = new URLSearchParams();
       params.set("ssid", (document.getElementById("wifiSsid").value || "").trim());
       params.set("password", document.getElementById("wifiPassword").value || "");
@@ -2077,9 +2103,15 @@ const char* WebPortal::dashboardPage() const {
           headers: { "Content-Type": "application/x-www-form-urlencoded" },
           body: params.toString()
         });
-        setText("wifiStatus", (data.message || "连接成功") + (data.ip ? ("，IP：" + data.ip) : ""));
+        setText("wifiStatus", formatWifiConnectMessage(data, "Connecting WiFi..."));
+        if (data.connecting && !data.connected) {
+          const finalStatus = await waitForWifiConnectResult(18000);
+          setText("wifiStatus", formatWifiConnectMessage(finalStatus, "WiFi connection failed."));
+        }
       } catch (error) {
         setText("wifiStatus", toMessage(error.message));
+      } finally {
+        connectButton.disabled = false;
       }
     }
 

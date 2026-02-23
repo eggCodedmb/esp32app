@@ -36,9 +36,12 @@ WebPortal webPortal(8080,
                      timeService,
                      firmwareUpgradeService);
 bool setupApRunning = false;
-bool wifiStateInitialized = false;
-bool lastWifiConnected = false;
 String lastReportedPowerState = "";
+
+bool isAccessPointModeEnabled() {
+  const wifi_mode_t mode = WiFi.getMode();
+  return mode == WIFI_MODE_AP || mode == WIFI_MODE_APSTA;
+}
 
 bool isPowerOnCommand(const String& command) {
   return command == "on" || command == "1" || command == "start" || command == "wake";
@@ -138,9 +141,13 @@ void reportPowerStateIfChanged() {
 }
 
 void startSetupAccessPoint() {
-  if (setupApRunning) {
+  if (setupApRunning && isAccessPointModeEnabled()) {
     return;
   }
+
+  // AP state can be changed by WiFi stack during failed station reconnects.
+  // Resync local flag with actual mode before trying to start AP again.
+  setupApRunning = false;
 
   WiFi.mode(WIFI_AP_STA);
   if (!WiFi.softAP(kSetupApSsid)) {
@@ -157,7 +164,7 @@ void startSetupAccessPoint() {
 }
 
 void stopSetupAccessPoint() {
-  if (!setupApRunning) {
+  if (!setupApRunning && !isAccessPointModeEnabled()) {
     return;
   }
 
@@ -168,14 +175,10 @@ void stopSetupAccessPoint() {
 }
 
 void syncSetupAccessPoint(bool wifiConnected) {
-  if (!wifiStateInitialized || wifiConnected != lastWifiConnected) {
-    if (wifiConnected) {
-      stopSetupAccessPoint();
-    } else {
-      startSetupAccessPoint();
-    }
-    lastWifiConnected = wifiConnected;
-    wifiStateInitialized = true;
+  if (wifiConnected) {
+    stopSetupAccessPoint();
+  } else {
+    startSetupAccessPoint();
   }
 }
 }  // namespace
@@ -192,6 +195,7 @@ void setup() {
   } else {
     Serial.print("Stored WiFi reconnect not ready: ");
     Serial.println(wifiService.lastMessage());
+    Serial.println("Switching to setup AP mode.");
   }
 
   syncSetupAccessPoint(wifiService.isConnected());
@@ -216,6 +220,7 @@ void setup() {
 }
 
 void loop() {
+  wifiService.tick();
   const bool wifiConnected = wifiService.isConnected();
   syncSetupAccessPoint(wifiConnected);
   powerOnService.tick(wifiConnected);

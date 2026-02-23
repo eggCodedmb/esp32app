@@ -884,8 +884,26 @@ void WebPortal::registerRoutes() {
     body += "\"fromCache\":" + String(scanResult.fromCache ? "true" : "false") + ",";
     body += "\"scanInProgress\":" + String(scanResult.scanInProgress ? "true" : "false") + ",";
     body += "\"ageMs\":" + String(scanResult.ageMs) + ",";
+    body += "\"connecting\":" + String(_wifiService.isConnecting() ? "true" : "false") + ",";
+    body += "\"message\":\"" + jsonEscape(_wifiService.lastMessage()) + "\",";
     body += "\"connected\":" + String(_wifiService.isConnected() ? "true" : "false") + ",";
     body += "\"currentSsid\":\"" + jsonEscape(_wifiService.currentSsid()) + "\",";
+    body += "\"ip\":\"" + jsonEscape(_wifiService.ipAddress()) + "\"";
+    body += "}";
+
+    request->send(200, "application/json", body);
+  });
+
+  _server.on("/api/wifi/status", HTTP_GET, [this](AsyncWebServerRequest* request) {
+    if (!ensureAuthorized(request, true)) {
+      return;
+    }
+
+    String body = "{";
+    body += "\"connecting\":" + String(_wifiService.isConnecting() ? "true" : "false") + ",";
+    body += "\"connected\":" + String(_wifiService.isConnected() ? "true" : "false") + ",";
+    body += "\"currentSsid\":\"" + jsonEscape(_wifiService.currentSsid()) + "\",";
+    body += "\"message\":\"" + jsonEscape(_wifiService.lastMessage()) + "\",";
     body += "\"ip\":\"" + jsonEscape(_wifiService.ipAddress()) + "\"";
     body += "}";
 
@@ -907,14 +925,17 @@ void WebPortal::registerRoutes() {
       return;
     }
 
-    const bool connected = _wifiService.connectTo(ssid, password);
+    const bool accepted = _wifiService.startConnect(ssid, password);
     String body = "{";
-    body += "\"success\":" + String(connected ? "true" : "false") + ",";
+    body += "\"success\":" + String(accepted ? "true" : "false") + ",";
+    body += "\"connecting\":" + String(_wifiService.isConnecting() ? "true" : "false") + ",";
+    body += "\"connected\":" + String(_wifiService.isConnected() ? "true" : "false") + ",";
     body += "\"message\":\"" + jsonEscape(_wifiService.lastMessage()) + "\",";
     body += "\"ip\":\"" + jsonEscape(_wifiService.ipAddress()) + "\"";
     body += "}";
 
-    request->send(connected ? 200 : 500, "application/json", body);
+    const int statusCode = accepted ? (_wifiService.isConnected() ? 200 : 202) : 409;
+    request->send(statusCode, "application/json", body);
   });
 
   _server.on("/api/power/status", HTTP_GET, [this](AsyncWebServerRequest* request) {
